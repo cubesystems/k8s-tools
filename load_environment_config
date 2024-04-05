@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # use given base directory
 runtime_dir=$(realpath `dirname ${0}`)
 tools_dir=$(dirname `realpath ${0}`)
@@ -60,7 +62,7 @@ else
     if [ "${environment_key_file}" != "null" ]
     then
         environment_key_path="${runtime_dir}/keys/${environment_key_file}"
-        if [ -f "/path/to/your/file.txt" ]; then
+        if [ -f "${environment_key_path}" ]; then
             environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
         fi
     fi
