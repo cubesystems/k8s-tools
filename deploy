@@ -18,8 +18,6 @@ source $(dirname $(realpath ${0}))/load_environment_config
 
 environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\"].values | map(\"${runtime_dir}/values/\" + .) | join(\",\")"`
 
-echo $environment_values
-
 if [ "${environment_encryption_key}" != "null" ]
 then
   environment_values="${environment_values} --set encryptionKey=${environment_encryption_key}"
