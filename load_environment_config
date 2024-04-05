@@ -1,8 +1,9 @@
 # use given base directory
-base_dir=$1
+runtime_dir=$(realpath `dirname ${0}`)
+tools_dir=$(dirname `realpath ${0}`)
 
 # deployments file
-deployments_file=${base_dir}/deployments.yaml
+deployments_file=${runtime_dir}/deployments.yaml
 
 # make sure that given environment name is known
 environment_exists=`yq ".environments.${environment_name}" ${deployments_file}`
@@ -42,7 +43,7 @@ if [ -n "${CI}" ]; then
         check_env_variable "DEPLOY_KUBECTL_SERVER_URL"
         check_env_variable "DEPLOY_KUBECTL_TOKEN"
 
-        SERVER_URL=${DEPLOY_KUBECTL_SERVER_URL} TOKEN=${DEPLOY_KUBECTL_TOKEN} envsubst < ${base_dir}/kubeconfig.template > ${KUBECONFIG}
+        SERVER_URL=${DEPLOY_KUBECTL_SERVER_URL} TOKEN=${DEPLOY_KUBECTL_TOKEN} envsubst < ${tools_dir}/kubeconfig.template > ${KUBECONFIG}
     fi
 
 
@@ -53,12 +54,12 @@ if [ -n "${CI}" ]; then
     fi
 else
     if [ "${environment_kubeconfig}" != "null" ]; then
-      export KUBECONFIG=${base_dir}/${environment_kubeconfig}
+      export KUBECONFIG=${runtime_dir}/${environment_kubeconfig}
     fi
 
     if [ "${environment_key_file}" != "null" ]
     then
-        environment_key_path="${base_dir}/keys/${environment_key_file}"
+        environment_key_path="${runtime_dir}/keys/${environment_key_file}"
         if [ -f "/path/to/your/file.txt" ]; then
             environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
         fi

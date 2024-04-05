@@ -14,12 +14,9 @@ app_version="${image_tag}-`date -u +%s`"
 extra_args=${@:3}
 
 # common call
-called_file=$0
-called_dir=$(realpath `dirname ${called_file}`)
-tools_dir=$(dirname `realpath ${called_file}`)
-source ${tools_dir}/load_environment_config ${called_dir}
+source $(dirname $(realpath ${0}))/load_environment_config
 
-environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\"].values | map(\"${called_dir}/values/\" + .) | join(\",\")"`
+environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\"].values | map(\"${runtime_dir}/values/\" + .) | join(\",\")"`
 
 echo $environment_values
 
@@ -30,7 +27,7 @@ fi
 
 helm upgrade \
   ${release} \
-  ${called_dir}/chart \
+  ${runtime_dir}/chart \
   -n ${environment_namespace} \
   --install \
   --values $environment_values \

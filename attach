@@ -13,10 +13,7 @@ pod_name=$2
 command=${3:-bash}
 
 # common call
-called_file=$0
-called_dir=$(realpath `dirname ${called_file}`)
-tools_dir=$(dirname `realpath ${called_file}`)
-source ${tools_dir}/load_environment_config ${called_dir}
+source $(dirname $(realpath ${0}))/load_environment_config
 
 matching_pod_name=$(kubectl -n ${environment_namespace} get pods | grep ${pod_name} | grep Running  | head -n 1 | cut -d ' ' -f 1)
 

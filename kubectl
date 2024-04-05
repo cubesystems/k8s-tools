@@ -12,9 +12,6 @@ environment_name=$1
 kubectl_args=${@:2}
 
 # common call
-called_file=$0
-called_dir=$(realpath `dirname ${called_file}`)
-tools_dir=$(dirname `realpath ${called_file}`)
-source ${tools_dir}/load_environment_config ${called_dir}
+source $(dirname $(realpath ${0}))/load_environment_config
 
 kubectl -n ${environment_namespace} ${kubectl_args}
