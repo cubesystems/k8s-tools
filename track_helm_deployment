@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+# exit on any failing command
+set -e
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 RELEASE NAMESPACE" >&2
+  exit 1
+fi
+
+RELEASE=$1
+NAMESPACE=$2
+
+# check statuses for jobs
+helm get manifest ${RELEASE} -n ${NAMESPACE}  | yq -o=json | jq -c 'select(.kind == ("Job"))' |
+  while IFS=$"\n" read -r c; do
+    name=$(echo "$c" | jq -r '.metadata.name')
+
+    echo "Waiting for ${name} job to complete..."
+    while true ; do
+
+      status=`kubectl -n ${NAMESPACE} get pods -o json | jq -r ".items[] | select(.[\"metadata\"][\"labels\"][\"job-name\"] == \"${name}\") | .status.phase"`
+
+      echo "status: $status"
+
+      if [ "$status" = "Succeeded" ] ; then
+        break
+      elif [ "$status" = "Failed" ] ; then
+        exit 1
+        break
+      elif [ "$status" = "" ] ; then
+        exit 1
+        break
+      fi
+
+      sleep 1
+    done
+  done
+
+
+# check rollout statuses
+helm get manifest ${RELEASE} -n ${NAMESPACE}  | yq -o=json | jq -c 'select(.kind == ("Deployment", "StatefulSet", "DaemonSet"))' |
+  while IFS=$"\n" read -r c; do
+    kind=$(echo "$c" | jq -r '.kind')
+    name=$(echo "$c" | jq -r '.metadata.name')
+
+    kubectl -n ${NAMESPACE} rollout status ${kind}/${name}
+  done

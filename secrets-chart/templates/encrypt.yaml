@@ -1,0 +1,24 @@
+{{- if eq $.Values.action "encrypt" }}
+secrets:
+  {{- range $setKey, $setValues := .Values.secrets }}
+  {{ $setKey }}:
+    data:
+    {{- range $key, $value := $setValues.data }}
+    {{- if not (hasPrefix "HELM_SECRET:" $value) }}
+      {{ $key }}: HELM_SECRET:{{ encryptAES $.Values.encryptionKey ($value) }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{- if eq $.Values.action "decrypt" }}
+secrets:
+  {{- range $setKey, $setValues := .Values.secrets }}
+  {{ $setKey }}:
+    {{- range $key, $value := $setValues.data }}
+    {{- if hasPrefix "HELM_SECRET:" $value }}
+      {{ $key }}: {{ trimPrefix "HELM_SECRET:" $value | decryptAES $.Values.encryptionKey | quote }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

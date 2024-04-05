@@ -1,0 +1,64 @@
+# use given base directory
+base_dir=$1
+
+# deployments file
+deployments_file=${base_dir}/deployments.yaml
+
+# make sure that given environment name is known
+environment_exists=`yq ".environments.${environment_name}" ${deployments_file}`
+
+if [ "${environment_exists}" = "null" ]
+then
+  echo "Environment \"${environment_name}\" not found in deployments.yaml"
+  exit 1
+fi
+
+# load config as flattened json
+config=`yq ${deployments_file} -o json | jq -c`
+
+release=`echo $config | jq -r ".release"`
+environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
+environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
+environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
+
+# env variable validation helper
+check_env_variable() {
+    if [[ -z "${!1}" ]]; then
+        echo "ENV variable '$1' not defined."
+        exit 1
+    fi
+}
+
+if [ -n "${VAULT_SECRETS}" ]; then
+  source `which read-vault-secrets.sh`
+fi
+
+if [ -n "${CI}" ]; then
+    export KUBECONFIG=$(mktemp)
+
+    if [ -n "${DEPLOY_KUBECONFIG}" ]; then
+        echo "${DEPLOY_KUBECONFIG}" > ${KUBECONFIG}
+    else
+        check_env_variable "DEPLOY_KUBECTL_SERVER_URL"
+        check_env_variable "DEPLOY_KUBECTL_TOKEN"
+
+        SERVER_URL=${DEPLOY_KUBECTL_SERVER_URL} TOKEN=${DEPLOY_KUBECTL_TOKEN} envsubst < ${base_dir}/kubeconfig.template > ${KUBECONFIG}
+    fi
+
+
+    if [ "${environment_key_file}" != "null" ]
+    then
+        check_env_variable "DEPLOY_ENCRYPTION_KEY"
+        environment_encryption_key=$DEPLOY_ENCRYPTION_KEY
+    fi
+else
+    if [ "${environment_kubeconfig}" != "null" ]; then
+      export KUBECONFIG=${base_dir}/${environment_kubeconfig}
+    fi
+
+    if [ "${environment_key_file}" != "null" ]
+    then
+        environment_key_path="${base_dir}/keys/${environment_key_file}"
+        environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
+    fi
+fi

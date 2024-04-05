@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+if [ "$#" -lt 3 ]; then
+  echo "Usage: $0 SERVER USERNAME PASSWORD" >&2
+  exit 1
+fi
+
+# exit on any failing command
+set -e
+
+server=$1
+username=$2
+password=$3
+
+auth=`echo -n "${username}:${password}" | base64`
+
+echo ".dockerconfigjson: '{\"auths\":{\"${server}\":{\"username\":\"${username}\",\"password\":\"${password}\",\"email\":\"${username}\",\"auth\":\"${auth}\"}}}'"

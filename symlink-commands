@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+current_file=`realpath $0`
+base_dir=`dirname ${current_file}`
+base_dir_name=`basename ${base_dir}`
+
+commands=("attach deploy kubectl secrets")
+
+for command in ${commands}; do
+  if [ ! -f ${command} ]; then
+    ln -s ${base_dir_name}/${command} ${command}
+    echo "${command} linked to ${base_dir_name}/${command}"
+  fi
+done

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+if [ "$#" -lt 1 ]; then
+  echo "Usage: $0 ENVIRONMENT" >&2
+  exit 1
+fi
+
+# exit on any failing command
+set -e
+
+environment_name=$1
+kubectl_args=${@:2}
+
+# common call
+called_file=$0
+called_dir=$(realpath `dirname ${called_file}`)
+tools_dir=$(dirname `realpath ${called_file}`)
+source ${tools_dir}/load_environment_config ${called_dir}
+
+kubectl -n ${environment_namespace} ${kubectl_args}
