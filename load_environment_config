@@ -59,6 +59,8 @@ else
     if [ "${environment_key_file}" != "null" ]
     then
         environment_key_path="${base_dir}/keys/${environment_key_file}"
-        environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
+        if [ -f "/path/to/your/file.txt" ]; then
+            environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
+        fi
     fi
 fi
