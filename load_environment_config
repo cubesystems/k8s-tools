@@ -23,14 +23,23 @@ release=`echo $config | jq -r ".release"`
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
 environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
-environment_chart=`echo $config | jq -r ".environments[\"${environment_name}\"].chart // .defaults.chart"`
-environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .defaults.repo"`
+environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .repo"`
+environment_chart=`echo $config | jq -r ".environments[\"${environment_name}\"].chart // .chart"`
+environment_chart_version=`echo $config | jq -r ".environments[\"${environment_name}\"].version // .version"`
 
-# support both local and remote charts
-if [ "${environment_repo}" != "null" ]; then
-    environment_repo_arg="--repo ${environment_repo}"
-else
+# use local chart
+if [ "${environment_repo}" == "null" ]; then
     environment_chart="${runtime_dir}/${environment_chart}"
+fi
+
+chart_arg="${environment_chart}"
+
+if [ "${environment_repo}" != "null" ]; then
+    chart_arg="${chart_arg} --repo ${environment_repo}"
+fi
+
+if [ "${environment_chart_version}" != "null" ]; then
+    chart_arg="${chart_arg} --version ${environment_chart_version}"
 fi
 
 # env variable validation helper

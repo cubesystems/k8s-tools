@@ -25,8 +25,7 @@ fi
 
 helm upgrade \
   ${release} \
-  ${environment_chart} \
-  ${environment_repo_arg} \
+  ${chart_arg} \
   -n ${environment_namespace} \
   --install \
   --values $environment_values \
