@@ -25,7 +25,8 @@ fi
 
 helm upgrade \
   ${release} \
-  ${runtime_dir}/chart \
+  ${environment_chart} \
+  ${environment_repo_arg} \
   -n ${environment_namespace} \
   --install \
   --values $environment_values \
