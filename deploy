@@ -13,13 +13,18 @@ image_tag=$2
 app_version="${image_tag}-`date -u +%s`"
 extra_args=${@:3}
 
+if [ -n "$DEPLOY_RESOURCE_PREFIX" ]; then
+  resource_prefix=${DEPLOY_RESOURCE_PREFIX}-
+else
+  resource_prefix=""
+fi
+
 # common call
 source $(dirname $(realpath ${0}))/load_environment_config
 
 environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\"].values | map(\"${runtime_dir}/values/\" + .) | join(\",\")"`
 
-if [ "${environment_encryption_key}" != "null" ]
-then
+if [ "${environment_encryption_key}" != "null" ]; then
   environment_values="${environment_values} --set encryptionKey=${environment_encryption_key}"
 fi
 
@@ -32,8 +37,9 @@ helm upgrade \
   --create-namespace \
   --set image.tag=${image_tag} \
   --set appVersion=${app_version} \
+  --set resourcePrefix=${resource_prefix} \
   ${extra_args}
 
-if [ "$extra_args"  == '' ]; then
+if [ "$extra_args"  == '' ] || [ -n "$DEPLOY_TRACK" ]; then
   ${tools_dir}/track_helm_deployment ${release} ${environment_namespace}
 fi

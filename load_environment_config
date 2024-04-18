@@ -19,7 +19,7 @@ fi
 # load config as flattened json
 config=`yq ${deployments_file} -o json | jq -c`
 
-release=`echo $config | jq -r ".release"`
+release=${DEPLOY_RELEASE:-`echo $config | jq -r ".release"`}
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
 environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
