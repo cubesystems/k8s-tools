@@ -55,15 +55,21 @@ if [ -n "${VAULT_SECRETS}" ]; then
 fi
 
 if [ -n "${CI}" ]; then
-    export KUBECONFIG=$(mktemp)
-
-    if [ -n "${DEPLOY_KUBECONFIG}" ]; then
-        echo "${DEPLOY_KUBECONFIG}" > ${KUBECONFIG}
+    # support for GitLab KAS agent
+    if [ -n "${DEPLOY_KUBE_CONTEXT}" ]; then
+      kubectl config use-context ${DEPLOY_KUBE_CONTEXT}
+      chmod 600 $KUBECONFIG
     else
-        check_env_variable "DEPLOY_KUBECTL_SERVER_URL"
-        check_env_variable "DEPLOY_KUBECTL_TOKEN"
+      export KUBECONFIG=$(mktemp)
 
-        SERVER_URL=${DEPLOY_KUBECTL_SERVER_URL} TOKEN=${DEPLOY_KUBECTL_TOKEN} envsubst < ${tools_dir}/kubeconfig.template > ${KUBECONFIG}
+      if [ -n "${DEPLOY_KUBECONFIG}" ]; then
+          echo "${DEPLOY_KUBECONFIG}" > ${KUBECONFIG}
+      else
+          check_env_variable "DEPLOY_KUBECTL_SERVER_URL"
+          check_env_variable "DEPLOY_KUBECTL_TOKEN"
+
+          SERVER_URL=${DEPLOY_KUBECTL_SERVER_URL} TOKEN=${DEPLOY_KUBECTL_TOKEN} envsubst < ${tools_dir}/kubeconfig.template > ${KUBECONFIG}
+      fi
     fi
 
 
