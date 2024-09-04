@@ -21,6 +21,7 @@ config=`yq ${deployments_file} -o json | jq -c`
 
 release=${DEPLOY_RELEASE:-`echo $config | jq -r ".release"`}
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
+environment_create_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].createNamespace // .defaults.createNamespace"`
 environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
 environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .repo"`
@@ -40,6 +41,10 @@ fi
 
 if [ "${environment_chart_version}" != "null" ]; then
     chart_arg="${chart_arg} --version ${environment_chart_version}"
+fi
+
+if [ "${environment_create_namespace}" != "false" ]; then
+    chart_arg="${chart_arg} --create-namespace"
 fi
 
 # env variable validation helper

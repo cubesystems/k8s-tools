@@ -34,7 +34,6 @@ helm upgrade \
   -n ${environment_namespace} \
   --install \
   --values $environment_values \
-  --create-namespace \
   --set image.tag=${image_tag} \
   --set appVersion=${app_version} \
   --set resourcePrefix=${resource_prefix} \
