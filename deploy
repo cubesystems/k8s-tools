@@ -20,12 +20,18 @@ else
 fi
 
 # common call
+require_encryption_key=1
 source $(dirname $(realpath ${0}))/load_environment_config
 
 environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\"].values | map(\"${runtime_dir}/values/\" + .) | join(\",\")"`
 
-if [ "${environment_encryption_key}" != "null" ]; then
-  environment_values="${environment_values} --set encryptionKey=${environment_encryption_key}"
+helm_key_args=()
+
+if [ -n "${environment_encryption_key}" ] && [ "${environment_encryption_key}" != "null" ]; then
+  # keep the key out of argv, where any same-user process would see it via ps
+  # fixed fd number rather than `exec {fd}<` - macOS ships bash 3.2, which has no auto-allocation
+  exec 9< <(printf 'encryptionKey: %s\n' "${environment_encryption_key}")
+  helm_key_args=(--values /dev/fd/9)
 fi
 
 helm upgrade \
@@ -33,7 +39,8 @@ helm upgrade \
   ${chart_arg} \
   -n ${environment_namespace} \
   --install \
-  --values $environment_values \
+  --values "${environment_values}" \
+  "${helm_key_args[@]}" \
   --set image.tag=${image_tag} \
   --set appVersion=${app_version} \
   --set resourcePrefix=${resource_prefix} \

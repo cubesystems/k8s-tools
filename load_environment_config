@@ -23,6 +23,7 @@ release=${DEPLOY_RELEASE:-`echo $config | jq -r ".release"`}
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
 environment_create_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].createNamespace // .defaults.createNamespace"`
 environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
+environment_key_ref=`echo $config | jq -r ".environments[\"${environment_name}\"].keyRef // .defaults.keyRef"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
 environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .repo"`
 environment_chart=`echo $config | jq -r ".environments[\"${environment_name}\"].chart // .chart"`
@@ -91,7 +92,22 @@ else
     if [ "${environment_key_file}" != "null" ]
     then
         environment_key_path="${runtime_dir}/keys/${environment_key_file}"
-        if [ -f "${environment_key_path}" ]; then
+
+        if [ "${environment_key_ref}" != "null" ] && [ -n "${require_encryption_key}" ]; then
+            if ! command -v ap > /dev/null; then
+                echo "Axo Pass CLI 'ap' not found; install it from https://axo.sh or remove keyRef from deployments.yaml"
+                exit 1
+            fi
+
+            environment_encryption_key=$(ap read "${environment_key_ref}" | tr -d '\n\r')
+
+            # this file is sourced without `set -e` by kubectl and attach, so a cancelled
+            # Touch ID prompt would otherwise fall through with an empty key
+            if [ -z "${environment_encryption_key}" ]; then
+                echo "Could not read ${environment_key_ref} from Axo Pass"
+                exit 1
+            fi
+        elif [ -f "${environment_key_path}" ]; then
             environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
         fi
     fi
