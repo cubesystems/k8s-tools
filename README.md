@@ -31,8 +31,7 @@ chart: laravel
 version: 1.3.9
 
 defaults:
-  keyFile: main.key  # Default encryption key file for all environments
-  keyRef: axo://my-application/k8s/main-key  # Optional: read the key from Axo Pass instead
+  keyRef: file://keys/main.key  # Where the encryption key is read from
 
 environments:
   test:
@@ -45,7 +44,7 @@ environments:
   production:
     namespace: my-app-production
     kubeconfig: production.kubeconfig.yml
-    keyFile: production.key  # Override default key for production
+    keyRef: axo://my-application/k8s/production-key  # Override default key for production
     values:
       - groups/all.yaml
       - environments/production.yaml
@@ -59,8 +58,7 @@ environments:
 - **`version`**: Chart version (optional)
 
 **`defaults` section (all optional):**
-- **`keyFile`**: Default encryption key file (relative to `k8s/keys/` directory)
-- **`keyRef`**: Default Axo Pass reference to read the encryption key from (see Secrets Management)
+- **`keyRef`**: Default reference to read the encryption key from (see Secrets Management)
 - **`namespace`**: Default namespace for all environments
 - **`kubeconfig`**: Default kubeconfig file
 - **`createNamespace`**: Whether to create namespace if it doesn't exist (default: true)
@@ -68,8 +66,7 @@ environments:
 **Per-environment options:**
 - **`namespace`**: Kubernetes namespace (required unless set in defaults)
 - **`kubeconfig`**: Path to kubeconfig file relative to k8s directory (optional)
-- **`keyFile`**: Override default encryption key file for this environment (optional)
-- **`keyRef`**: Override default Axo Pass reference for this environment (optional)
+- **`keyRef`**: Override default encryption key reference for this environment (optional)
 - **`values`**: Array of values files to apply (order matters - later files override earlier ones)
 - **`createNamespace`**: Override default namespace creation behavior (optional)
 - **`repo`**: Override chart repository URL (optional)
@@ -80,11 +77,9 @@ environments:
 - The `defaults` section is entirely optional - you can configure everything per-environment
 - Values files are applied in order - later files override values from earlier files
 - `kubeconfig` is optional - if not specified, uses your default kubectl context
-- `keyFile` is optional - only needed if you're using encrypted secrets
-- `keyRef` takes effect only where `keyFile` is also set - it replaces where the key is read from,
-  not whether the environment has one
+- `keyRef` is optional - only needed if you're using encrypted secrets
 - Environment-specific settings override `defaults` section
-- For production, it's recommended to use a separate `keyFile` for enhanced security
+- For production, it's recommended to use a separate `keyRef` for enhanced security
 
 ## Secrets Management
 
@@ -95,19 +90,19 @@ environments:
 
 **Local Development:**
 
-Option 1 (Recommended - [Axo Pass](https://axo.sh)):
+`keyRef` names where the key comes from, and its scheme decides how it is read. Only `deploy` and
+`secrets` read it, so `kubectl` and `attach` never touch the key.
 
-Point `keyRef` at a vault entry and the key is read on each deploy, unlocked by Touch ID, so no
-plaintext key is kept on disk:
+Option 1 (Recommended - [Axo Pass](https://axo.sh)):
 
 ```yaml
 defaults:
-  keyFile: main.key
   keyRef: axo://my-application/k8s/main-key
 ```
 
-The three segments of the reference are the vault name, the secret ID and the key inside it -
-create them in the Axo Pass app in that order. The secret's **ID** is what appears in the
+The key is read from the vault on each deploy, unlocked by Touch ID, so no plaintext key is kept
+on disk. The three segments of the reference are the vault name, the secret ID and the key inside
+it - create them in the Axo Pass app in that order. The secret's **ID** is what appears in the
 reference; the Name beside it is only a label. The `ap` CLI ships inside the app bundle and is
 symlinked to `/usr/local/bin/ap`, so there is nothing separate to install. Check that the
 reference resolves:
@@ -116,19 +111,22 @@ reference resolves:
 ap read axo://my-application/k8s/main-key
 ```
 
-Only `deploy` and `secrets` read the key, so `kubectl` and `attach` never prompt for Touch ID.
-
 Option 2 (Key file, for temporary use):
+
+```yaml
+defaults:
+  keyRef: file://keys/main.key  # relative to the k8s directory; file:///abs/path also works
+```
+
 ```shell
 # Store key in k8s/keys/main.key (already in .gitignore)
 echo "your-encryption-key-here" > k8s/keys/main.key
 ```
 
-Option 3 (Shell environment):
-```shell
-# Prefix with space to prevent shell history storage
- DEPLOY_ENCRYPTION_KEY=your-encryption-key-here
-```
+An unknown scheme is refused rather than guessed at.
+
+**CI note:** `keyRef` only decides *whether* an environment has a key. In CI the value always
+comes from `DEPLOY_ENCRYPTION_KEY`, whatever the scheme says.
 
 ⚠️ **Security Note:** Keep local encryption keys only temporarily. Remove them when not actively needed.
 
@@ -185,8 +183,8 @@ To verify encrypted values locally:
 - Rotate encryption keys periodically
 - Store keys securely in CI/CD secret management
 - Use the space-prefix method when setting keys in shell to avoid history
-- Remove local key files (`k8s/keys/*.key`) when not actively developing - with `keyRef` there is
-  no key file to remove
+- Remove local key files (`k8s/keys/*.key`) when not actively developing - with an `axo://` keyRef
+  there is no key file to remove
 - Ensure `k8s/keys/` is in `.gitignore`
 
 ❌ **DON'T:**

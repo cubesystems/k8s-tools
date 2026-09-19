@@ -27,10 +27,12 @@ environment_values=`echo "$config" | jq -r ".environments[\"${environment_name}\
 
 helm_key_args=()
 
-if [ -n "${environment_encryption_key}" ] && [ "${environment_encryption_key}" != "null" ]; then
+if [ -n "${environment_encryption_key}" ]; then
   # keep the key out of argv, where any same-user process would see it via ps
   # fixed fd number rather than `exec {fd}<` - macOS ships bash 3.2, which has no auto-allocation
-  exec 9< <(printf 'encryptionKey: %s\n' "${environment_encryption_key}")
+  # single quotes keep any passphrase a YAML string; '' is the escape for a literal quote
+  escaped_encryption_key=$(printf '%s' "${environment_encryption_key}" | sed "s/'/''/g")
+  exec 9< <(printf "encryptionKey: '%s'\n" "${escaped_encryption_key}")
   helm_key_args=(--values /dev/fd/9)
 fi
 

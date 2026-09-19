@@ -22,7 +22,6 @@ config=`yq ${deployments_file} -o json | jq -c`
 release=${DEPLOY_RELEASE:-`echo $config | jq -r ".release"`}
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
 environment_create_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].createNamespace // .defaults.createNamespace"`
-environment_key_file=`echo $config | jq -r ".environments[\"${environment_name}\"].keyFile // .defaults.keyFile"`
 environment_key_ref=`echo $config | jq -r ".environments[\"${environment_name}\"].keyRef // .defaults.keyRef"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
 environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .repo"`
@@ -47,6 +46,50 @@ fi
 if [ "${environment_create_namespace}" != "false" ]; then
     chart_arg="${chart_arg} --create-namespace"
 fi
+
+# read the encryption key from the source named by keyRef
+resolve_encryption_key() {
+    local key_ref=$1
+    local key_scheme=${key_ref%%://*}
+    local key_locator=${key_ref#*://}
+
+    case "${key_scheme}" in
+        file)
+            local key_path=${key_locator}
+
+            # anything not rooted is relative to the k8s directory
+            if [ "${key_path#/}" = "${key_path}" ]; then
+                key_path="${runtime_dir}/${key_path}"
+            fi
+
+            if [ ! -f "${key_path}" ]; then
+                echo "Encryption key file ${key_path} not found"
+                exit 1
+            fi
+
+            environment_encryption_key=$(cat "${key_path}" | tr -d '\n\r')
+            ;;
+        axo)
+            if ! command -v ap > /dev/null; then
+                echo "Axo Pass CLI 'ap' not found; install it from https://axo.sh or point keyRef at a file:// path"
+                exit 1
+            fi
+
+            environment_encryption_key=$(ap read "${key_ref}" | tr -d '\n\r')
+            ;;
+        *)
+            echo "Unsupported keyRef scheme '${key_scheme}' in deployments.yaml"
+            exit 1
+            ;;
+    esac
+
+    # this file is sourced without `set -e` by kubectl and attach, so a cancelled
+    # Touch ID prompt would otherwise fall through with an empty key
+    if [ -z "${environment_encryption_key}" ]; then
+        echo "Could not read encryption key from ${key_ref}"
+        exit 1
+    fi
+}
 
 # env variable validation helper
 check_env_variable() {
@@ -79,7 +122,7 @@ if [ -n "${CI}" ]; then
     fi
 
 
-    if [ "${environment_key_file}" != "null" ]
+    if [ "${environment_key_ref}" != "null" ]
     then
         check_env_variable "DEPLOY_ENCRYPTION_KEY"
         environment_encryption_key=$DEPLOY_ENCRYPTION_KEY
@@ -89,26 +132,7 @@ else
       export KUBECONFIG=${runtime_dir}/${environment_kubeconfig}
     fi
 
-    if [ "${environment_key_file}" != "null" ]
-    then
-        environment_key_path="${runtime_dir}/keys/${environment_key_file}"
-
-        if [ "${environment_key_ref}" != "null" ] && [ -n "${require_encryption_key}" ]; then
-            if ! command -v ap > /dev/null; then
-                echo "Axo Pass CLI 'ap' not found; install it from https://axo.sh or remove keyRef from deployments.yaml"
-                exit 1
-            fi
-
-            environment_encryption_key=$(ap read "${environment_key_ref}" | tr -d '\n\r')
-
-            # this file is sourced without `set -e` by kubectl and attach, so a cancelled
-            # Touch ID prompt would otherwise fall through with an empty key
-            if [ -z "${environment_encryption_key}" ]; then
-                echo "Could not read ${environment_key_ref} from Axo Pass"
-                exit 1
-            fi
-        elif [ -f "${environment_key_path}" ]; then
-            environment_encryption_key=$(cat ${environment_key_path} | tr -d '\n\r')
-        fi
+    if [ "${environment_key_ref}" != "null" ] && [ -n "${require_encryption_key}" ]; then
+        resolve_encryption_key "${environment_key_ref}"
     fi
 fi
