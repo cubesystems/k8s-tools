@@ -21,7 +21,8 @@ config=`yq ${deployments_file} -o json | jq -c`
 
 release=${DEPLOY_RELEASE:-`echo $config | jq -r ".release"`}
 environment_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].namespace // .defaults.namespace"`
-environment_create_namespace=`echo $config | jq -r ".environments[\"${environment_name}\"].createNamespace // .defaults.createNamespace"`
+# `//` treats false like null, so an environment's `createNamespace: false` would fall through to the default
+environment_create_namespace=`echo $config | jq -r "if .environments[\"${environment_name}\"] | has(\"createNamespace\") then .environments[\"${environment_name}\"].createNamespace else .defaults.createNamespace end"`
 environment_key_ref=`echo $config | jq -r ".environments[\"${environment_name}\"].keyRef // .defaults.keyRef"`
 environment_kubeconfig=`echo $config | jq -r ".environments[\"${environment_name}\"].kubeconfig // .defaults.kubeconfig"`
 environment_repo=`echo $config | jq -r ".environments[\"${environment_name}\"].repo // .repo"`
