@@ -1,24 +1,30 @@
-{{- if eq $.Values.action "encrypt" }}
-secrets:
-  {{- range $setKey, $setValues := .Values.secrets }}
-  {{ $setKey }}:
-    data:
-    {{- range $key, $value := $setValues.data }}
-    {{- if not (hasPrefix "HELM_SECRET:" $value) }}
-      {{ $key }}: HELM_SECRET:{{ encryptAES $.Values.encryptionKey ($value) }}
-    {{- end }}
-    {{- end }}
-  {{- end }}
-{{- end }}
-
-{{- if eq $.Values.action "decrypt" }}
-secrets:
-  {{- range $setKey, $setValues := .Values.secrets }}
-  {{ $setKey }}:
-    {{- range $key, $value := $setValues.data }}
-    {{- if hasPrefix "HELM_SECRET:" $value }}
-      {{ $key }}: {{ trimPrefix "HELM_SECRET:" $value | decryptAES $.Values.encryptionKey | quote }}
-    {{- end }}
-    {{- end }}
-  {{- end }}
-{{- end }}
+{{- $control := default dict .Values.__k8s_tools -}}
+{{- $action := required "local secrets action is required" $control.action -}}
+{{- $sets := default dict .Values.secrets -}}
+{{- if not (kindIs "map" $sets) -}}{{ fail "secrets must be a mapping" }}{{- end -}}
+{{- if eq $action "inspect" -}}
+  {{- if hasKey .Values "encryptionKey" -}}{{ fail "Remove encryptionKey from values files; use keyRef" }}{{- end -}}
+  {{- omit .Values "__k8s_tools" | toJson -}}
+{{- else -}}
+  {{- if not (has $action (list "encrypt" "encrypt-all" "decrypt")) -}}{{ fail "Unknown secrets action" }}{{- end -}}
+  {{- $key := required "encryptionKey is required for local encryption/decryption" $control.encryptionKey -}}
+  {{- $result := deepCopy $sets -}}
+  {{- range $setName, $set := $result -}}
+    {{- if not (kindIs "invalid" $set) -}}
+    {{- if not (kindIs "map" $set) -}}{{ fail (printf "secrets.%s must be a mapping" $setName) }}{{- end -}}
+    {{- range $name, $value := $set.data -}}
+      {{- /* Preserve null deletion markers for the application chart's values merge. */ -}}
+      {{- if not (kindIs "invalid" $value) -}}
+      {{- if not (kindIs "string" $value) -}}{{ fail (printf "secrets.%s.data.%s must be a string; quote numbers and booleans" $setName $name) }}{{- end -}}
+      {{- if eq $action "decrypt" -}}
+        {{- if not (hasPrefix "HELM_SECRET:" $value) -}}{{ fail (printf "Unencrypted secret: secrets.%s.data.%s; use secrets set/edit/encrypt" $setName $name) }}{{- end -}}
+        {{- $_ := set $set.data $name (decryptAES $key (trimPrefix "HELM_SECRET:" $value)) -}}
+      {{- else if or (eq $action "encrypt-all") (not (hasPrefix "HELM_SECRET:" $value)) -}}
+        {{- $_ := set $set.data $name (printf "HELM_SECRET:%s" (encryptAES $key $value)) -}}
+      {{- end -}}
+      {{- end -}}
+    {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- dict "secrets" $result | toJson -}}
+{{- end -}}

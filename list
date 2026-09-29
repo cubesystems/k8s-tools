@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+require_usage 0 '[--names | --json]' "$@"
+load_configuration
+case "${1:-}" in
+  --names) printf '%s' "$config" | jq -r '.deployments | keys[]';;
+  ''|--json)
+    deployments=$(printf '%s' "$config" | jq '
+      . as $root | .deployments | to_entries | map(
+      {name:.key} + ({release:$root.release,chart:$root.chart,version:$root.version} |
+      with_entries(select(.value != null))) + ($root.defaults // {}) + .value)')
+    if [ "${1:-}" = --json ]; then printf '%s\n' "$deployments";
+    else
+      table=$(
+        printf 'DEPLOYMENT\tCONTEXT\tNAMESPACE\tRELEASE\tCHART\tVERSION\n'
+        printf '%s' "$deployments" | jq -r '.[] |
+          [.name, (.context // .kubeconfig // (if .useCurrentContext == true then "current" else "current (explicit opt-in required)" end)),
+           .namespace, .release, .chart, .version] | map(if . == null or . == "" then "-" else . end) | @tsv')
+      # Align columns for people; keep tab-separated output for scripts and completion.
+      if [ -t 1 ]; then printf '%s\n' "$table" | column -t -s $'\t'; else printf '%s\n' "$table"; fi
+    fi;;
+  *) usage_error "Unknown list option: $1";;
+esac

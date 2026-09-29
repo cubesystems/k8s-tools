@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Sourced by deploy: follows the release's Jobs and workload rollouts until ready or the deadline passes.
+track_release_rollout() {
+  local deadline resources kind name strategy remaining condition
+  deadline=$((SECONDS + $1))
+  # Capture before iterating: failures in a process substitution would be lost.
+  resources=$(helm get manifest "$release" "${helm_connection_args[@]}" | yq -o=json -I=0 '.' | jq -r '
+    select(.kind == "Job" or .kind == "Deployment" or .kind == "StatefulSet" or .kind == "DaemonSet") |
+    [.kind, .metadata.name, (.spec.updateStrategy.type // "RollingUpdate")] | @tsv')
+  while IFS=$'\t' read -r kind name strategy; do
+    [ -n "$kind" ] || continue
+    # These controllers do not replace existing pods automatically with OnDelete.
+    case "$kind/$strategy" in
+      StatefulSet/OnDelete|DaemonSet/OnDelete)
+        echo "Skipping $kind/$name: OnDelete strategy; existing pods are not updated automatically."
+        continue;;
+    esac
+    remaining=$((deadline - SECONDS))
+    [ "$remaining" -gt 0 ] || die "Timed out before $kind/$name became ready"
+    if [ "$kind" = Job ]; then
+      echo "Waiting for job/$name..."
+      while :; do
+        condition=$(kubectl "${kube_args[@]}" get job "$name" -o json --request-timeout="${remaining}s" | jq -r '
+          [.status.conditions[]? | select(.status == "True") | .type] |
+          if index("Failed") then "Failed" elif index("Complete") then "Complete" else "Pending" end')
+        case "$condition" in
+          Complete) echo "job/$name complete"; break;;
+          Failed) die "job/$name failed";;
+        esac
+        sleep 2
+        remaining=$((deadline - SECONDS))
+        [ "$remaining" -gt 0 ] || die "Timed out waiting for job/$name"
+      done
+    else
+      kubectl "${kube_args[@]}" rollout status "$kind/$name" --timeout="${remaining}s"
+    fi
+  done <<< "$resources"
+}

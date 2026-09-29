@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+require_usage 1 'bash|zsh' "$@"
+case "$1" in bash|zsh) completion_shell=$1;; *) usage_error "Unsupported shell: $1";; esac
+cat "$tools_dir/completions.$completion_shell"
+deployment_dir=$(dirname "$tools_dir")
+for command_name in "${tool_commands[@]}"; do
+  case "$command_name" in init|completion|symlink-commands|update) continue;; esac
+  for command_path in "$deployment_dir/$command_name" "$tools_dir/$command_name" \
+    "./$command_name" "./k8s-tools/$command_name" "./k8s/$command_name" "./k8s/k8s-tools/$command_name"; do
+    if [ "$completion_shell" = bash ]; then printf 'complete -F _k8s_tools_complete %q\n' "$command_path";
+    else printf 'compdef _k8s_tools_complete %q\n' "$command_path"; fi
+  done
+done

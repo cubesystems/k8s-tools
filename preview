@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+usage_help='Renders locally with secret values redacted. --diff compares an existing release.'
+require_usage 1 'DEPLOYMENT [--diff] [--image-tag TAG] [HELM_TEMPLATE_OPTIONS]' "$@"
+preview_mode=true
+diff_mode=false
+preview_args=()
+for preview_arg in "$@"; do
+  if [ "$preview_arg" = --diff ]; then diff_mode=true; require_cluster=1; else preview_args+=("$preview_arg"); fi
+done
+set -- "${preview_args[@]}"
+source "$tools_dir/prepare_deployment"
+if [ "$diff_mode" = false ]; then
+  source "$tools_dir/render_preview"
+else
+  source "$tools_dir/secret_functions"
+  print_target
+  temporary_file previous_render
+  temporary_file proposed_render
+  # The current release must be readable; connection failures are not treated as an empty release.
+  current_manifest=$(helm get manifest "$release" "${helm_connection_args[@]}")
+  extra_args+=(--is-upgrade)
+  source "$tools_dir/render_preview" > "$proposed_render"
+  # Rendering first also makes managed plaintext available for redacting the old manifest.
+  printf '%s\n' "$current_manifest" | yq -o=json -I=0 '.' | redact_manifests > "$previous_render"
+  # Equal redaction placeholders must not conceal a secret-only change.
+  current_json=$(printf '%s\n' "$current_manifest" | yq -o=json -I=0 '.' | jq -sc .)
+  proposed_json=$(printf '%s\n' "$preview_manifest" | yq -o=json -I=0 '.' | jq -sc .)
+  printf '%s\n%s\n' "$current_json" "$proposed_json" |
+    jq -rs --arg namespace "$deployment_namespace" -f "$tools_dir/secret_changes.jq"
+  diff_status=0
+  diff -u --label current --label proposed "$previous_render" "$proposed_render" || diff_status=$?
+  # diff uses 1 for differences, not a failure to produce a comparison.
+  if [ "$diff_status" -gt 1 ]; then exit "$diff_status"; fi
+fi

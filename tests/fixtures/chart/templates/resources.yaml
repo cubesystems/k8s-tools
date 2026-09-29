@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample
+data:
+  imageTag: {{ .Values.image.tag | default "default" | quote }}
+  prefix: {{ .Values.resourcePrefix | default "configured" | quote }}
+  appVersion: {{ .Values.appVersion | default "stable" | quote }}
+---
+{{ range $name, $secret := .Values.secrets }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+data:
+{{ range $key, $value := $secret.data }}
+  {{ $key }}: {{ $value | b64enc | quote }}
+{{ end }}
+---
+{{ end }}

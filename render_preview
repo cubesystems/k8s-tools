@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+source "$tools_dir/secret_functions"
+prepare_secret_overlay
+# Capture the whole render before printing: a template failure must not leave a partial preview.
+preview_manifest=$(helm template "$release" "${chart_args[@]}" --namespace "$deployment_namespace" \
+  "${deployment_values_args[@]}" "${extra_args[@]}")
+printf '%s\n' "$preview_manifest" | yq -o=json -I=0 '.' | redact_manifests

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -eo pipefail
+case "$MOCK_EDITOR_MODE" in
+  unchanged) ;;
+  change) yq -i '.secrets["app-config"].data.ORIGINAL = "edited-value" | .secrets["app-config"].data.NEW = "new-value"' "$1";;
+  nulls) yq -i '.secrets["app-config"].data.OPTIONAL = null | .secrets["removed-group"] = null | .secrets["removed-data"].data = null' "$1";;
+  boolean) yq -i '.secrets["app-config"].data.ORIGINAL = false' "$1";;
+  invalid) printf 'secrets: [\n' > "$1";;
+  cancelled) exit 27;;
+  concurrent)
+    yq -i '.secrets["app-config"].data.ORIGINAL = "concurrent-editor-value"' "$1"
+    printf '\n# concurrent edit\n' >> "$MOCK_EDIT_SOURCE";;
+esac

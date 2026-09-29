@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-
-current_file=`realpath $0`
-base_dir=`dirname ${current_file}`
-base_dir_name=`basename ${base_dir}`
-
-commands=("attach deploy kubectl secrets")
-
-for command in ${commands}; do
-  if [ ! -f ${command} ]; then
-    ln -s ${base_dir_name}/${command} ${command}
-    echo "${command} linked to ${base_dir_name}/${command}"
+# Links commands into the directory that holds k8s-tools. Existing files are never replaced.
+source "$(dirname "$(realpath "$0")")/common"
+usage_help="Default: ${default_links[*]}. Available: ${tool_commands[*]}"
+require_usage 0 '[NAME...]' "$@"
+target_dir=$(dirname "$tools_dir")
+link_base=$(basename "$tools_dir")
+if [ "$#" -eq 0 ]; then set -- "${default_links[@]}"; fi
+for command_name in "$@"; do
+  case " ${tool_commands[*]} " in *" $command_name "*) ;; *) usage_error "Unknown command: $command_name";; esac
+  target=$target_dir/$command_name
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    printf 'Keeping existing command: %s\n' "$target"
+  else
+    ln -s "$link_base/$command_name" "$target"
+    printf '%s linked to %s/%s\n' "$command_name" "$link_base" "$command_name"
   fi
 done

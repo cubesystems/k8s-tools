@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-
-if [ "$#" -lt 2 ]; then
-  echo "Usage: $0 ENVIRONMENT POD_NAME" >&2
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+require_usage 2 'DEPLOYMENT POD_NAME [COMMAND ARG...]' "$@"
+deployment_name=$1
+pod_name=$2
+shift 2
+if [ "$#" -eq 0 ]; then set -- sh; fi
+require_cluster=1
+source "$tools_dir/load_deployment_config"
+pods=$(kubectl "${kube_args[@]}" get pods -o json)
+matching_pods=$(printf '%s' "$pods" | jq -r --arg name "$pod_name" '
+  [.items[] | select(.status.phase == "Running") | .metadata.name] |
+  if index($name) then [$name] else map(select(contains($name))) end | .[]')
+[ -n "$matching_pods" ] || die "No running pod matching \"$pod_name\" found"
+if [ "$(printf '%s\n' "$matching_pods" | wc -l | tr -d ' ')" -ne 1 ]; then
+  printf 'Several pods match; specify an exact name:\n%s\n' "$matching_pods" >&2
   exit 1
 fi
-
-# exit on any failing command
-set -e
-
-environment_name=$1
-pod_name=$2
-command=${3:-bash}
-
-# common call
-source $(dirname $(realpath ${0}))/load_environment_config
-
-matching_pod_name=$(kubectl -n ${environment_namespace} get pods | grep ${pod_name} | grep Running  | head -n 1 | cut -d ' ' -f 1)
-
-if [ "$matching_pod_name"  = '' ]; then
-  echo "No matching pod with name \"$pod_name\" found"
-else
-   kubectl -n ${environment_namespace} exec -ti ${matching_pod_name} -- ${command}
-fi
+exec_in_pod "$matching_pods" -- "$@"

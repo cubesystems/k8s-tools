@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Standalone bootstrap: downloads the current update command and lets it do the installation.
+set -eo pipefail
+repository=${K8S_TOOLS_REPOSITORY:-https://github.com/cubesystems/k8s-tools}
+
+main() {
+  if [ "${1:-}" = --help ]; then
+    echo 'Usage: install [DIRECTORY]'
+    echo 'Installs DIRECTORY/k8s-tools and links the daily commands in DIRECTORY (default: the current directory).'
+    echo 'K8S_TOOLS_REF=TAG_OR_BRANCH pins the revision; K8S_TOOLS_REF= takes the latest release without asking.'
+    return
+  fi
+  [ "$#" -le 1 ] || { echo 'Usage: install [DIRECTORY]' >&2; return 1; }
+  local dependency deployment_dir bootstrap_dir status=0
+  for dependency in curl tar; do
+    command -v "$dependency" >/dev/null || { echo "Required command is missing: $dependency" >&2; return 1; }
+  done
+  mkdir -p "${1:-.}"
+  deployment_dir=$(cd "${1:-.}" && pwd)
+  bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-bootstrap.XXXXXX")
+  if ! curl -fsSL "$repository/archive/master.tar.gz" | tar -xz --strip-components=1 -C "$bootstrap_dir"; then
+    rm -rf "$bootstrap_dir"
+    echo "Could not download $repository/archive/master.tar.gz" >&2
+    return 1
+  fi
+  # Under curl | bash, stdin carries this script; the child must not consume it.
+  bash "$bootstrap_dir/update" --install "$deployment_dir" < /dev/null || status=$?
+  rm -rf "$bootstrap_dir"
+  return "$status"
+}
+
+main "$@"

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Sourced by deploy and preview after common options are parsed.
+deployment_name=$1
+shift
+image_tag=
+if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then image_tag=$1; shift; fi
+extra_args=()
+override_args=()
+wait_enabled=true
+timeout_override=
+restart_requested=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --image-tag|--timeout|--namespace|-n|--kube-context|--kubeconfig|--repo|--version)
+      [ "$#" -ge 2 ] || die "$1 requires a value"
+      case "$1" in
+        --image-tag) image_tag=$2;;
+        --timeout) timeout_override=$2;;
+        --namespace|-n) namespace_override=$2;;
+        --kube-context) context_override=$2;;
+        --kubeconfig) kubeconfig_override=$(realpath "$2");;
+        --repo) chart_repo_override=$2;;
+        --version) chart_version_override=$2;;
+      esac
+      shift 2;;
+    --timeout=*) timeout_override=${1#*=}; shift;;
+    --namespace=*) namespace_override=${1#*=}; shift;;
+    --kube-context=*) context_override=${1#*=}; shift;;
+    --kubeconfig=*) kubeconfig_override=$(realpath "${1#*=}"); shift;;
+    --repo=*) chart_repo_override=${1#*=}; shift;;
+    --version=*) chart_version_override=${1#*=}; shift;;
+    --no-wait|--wait=false) wait_enabled=false; shift;;
+    --wait|--wait=true) wait_enabled=true; shift;;
+    --restart) restart_requested=true; shift;;
+    --dry-run|--dry-run=client) preview_mode=true; shift;;
+    --dry-run=*) die 'Use preview for a local render; server dry-run is not supported by this wrapper';;
+    --output-dir|--output-dir=*) die '--output-dir bypasses secret redaction; redirect preview output to a file instead';;
+    --reuse-values|--reuse-values=*|--reset-then-reuse-values|--reset-then-reuse-values=*) die 'Reusing release values can restore old encryption keys; supply the desired values files instead';;
+    --values|-f|--set|--set-string|--set-file|--set-json|--set-literal)
+      [ "$#" -ge 2 ] || die "$1 requires a value"
+      override_args+=("$1" "$2")
+      shift 2;;
+    --values=*|--set=*|--set-string=*|--set-file=*|--set-json=*|--set-literal=*) override_args+=("$1"); shift;;
+    -f?*) short_values=${1#-f}; override_args+=(--values "${short_values#=}"); shift;;
+    --) shift;;
+    *) extra_args+=("$1"); shift;;
+  esac
+done
+require_chart=1
+if [ "${preview_mode:-false}" != true ]; then require_cluster=1; fi
+source "$tools_dir/load_deployment_config"
+need_command helm
+require_deployment_value namespace "$deployment_namespace"
+load_values_files
+if [ -n "$timeout_override" ]; then deployment_timeout=$timeout_override; fi
+if ! [[ "$deployment_timeout" =~ ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$ ]]; then die "Invalid timeout: $deployment_timeout (example: 5m)"; fi
+[[ "$deployment_timeout" =~ [1-9] ]] || die 'Timeout must be greater than zero'
+# Rollout tracking counts in whole seconds; Helm keeps the original duration string.
+deployment_timeout_seconds=0
+timeout_rest=$deployment_timeout
+while [[ "$timeout_rest" =~ ^([0-9]+)(\.[0-9]+)?(ms|s|m|h)(.*)$ ]]; do
+  case "${BASH_REMATCH[3]}" in
+    h) deployment_timeout_seconds=$((deployment_timeout_seconds + BASH_REMATCH[1] * 3600));;
+    m) deployment_timeout_seconds=$((deployment_timeout_seconds + BASH_REMATCH[1] * 60));;
+    s) deployment_timeout_seconds=$((deployment_timeout_seconds + BASH_REMATCH[1]));;
+  esac
+  timeout_rest=${BASH_REMATCH[4]}
+done
+[ "$deployment_timeout_seconds" -gt 0 ] || deployment_timeout_seconds=1
+
+application_args=()
+if [ -n "$image_tag" ]; then
+  # JSON preserves numeric-looking image tags and punctuation without --set coercion.
+  case "$deployment_image_tag_path" in *[!a-zA-Z0-9_.-]*|.*|*.|*..*) die 'imageTagPath must be a dotted mapping path';; esac
+  image_json=$(jq -cn --arg tag "$image_tag" '$tag')
+  application_args=(--set-json "$deployment_image_tag_path=$image_json")
+fi
+if [ "${DEPLOY_RESOURCE_PREFIX+x}" = x ]; then
+  deployment_resource_prefix=$DEPLOY_RESOURCE_PREFIX
+  if [ -n "$deployment_resource_prefix" ]; then deployment_resource_prefix=${deployment_resource_prefix}-; fi
+fi
+if [ -n "$deployment_resource_prefix" ] || [ "${DEPLOY_RESOURCE_PREFIX+x}" = x ]; then
+  application_args+=(--set-literal "resourcePrefix=$deployment_resource_prefix")
+fi
+if [ "$restart_requested" = true ]; then
+  application_args+=(--set-literal "appVersion=${image_tag:-restart}-$(date -u +%s)")
+fi
+
+namespace_args=()
+if [ "$deployment_create_namespace" = true ]; then namespace_args=(--create-namespace); fi

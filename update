@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Vendors one revision of k8s-tools as plain files. `install` runs this with --install from a fresh download.
+set -eo pipefail
+# Public tarballs; no Git access or credentials are involved. Tests point this at a file:// fixture.
+repository=${K8S_TOOLS_REPOSITORY:-https://github.com/cubesystems/k8s-tools}
+
+# GitHub lists tags through its API; any other base serves a JSON array at BASE/tags.
+tags_url() {
+  case "$repository" in
+    https://github.com/*) printf 'https://api.github.com/repos/%s/tags\n' "${repository#https://github.com/}";;
+    *) printf '%s/tags\n' "$repository";;
+  esac
+}
+
+# Highest vX.Y.Z tag; sorted numerically per part because macOS sort has no -V.
+latest_release_tag() {
+  local tags
+  tags=$(curl -fsSL "$(tags_url)") || { echo "Could not list releases at $(tags_url)." >&2; return 1; }
+  printf '%s' "$tags" | jq -r '.[].name' |
+    sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' |
+    sort -t . -k1,1n -k2,2n -k3,3n | tail -n 1 | sed 's/^/v/'
+}
+
+# K8S_TOOLS_REF pins a tag or branch; set but empty takes the latest release without asking.
+select_revision() {
+  local answer
+  if [ "${K8S_TOOLS_REF+x}" = x ] && [ -n "$K8S_TOOLS_REF" ]; then k8s_tools_ref=$K8S_TOOLS_REF; return; fi
+  k8s_tools_ref=$(latest_release_tag)
+  if [ -z "$k8s_tools_ref" ]; then echo 'No release tags found; using master.' >&2; k8s_tools_ref=master; fi
+  [ "${K8S_TOOLS_REF+x}" = x ] && return
+  # Read the answer from the terminal: under curl | bash, stdin carries the installer script.
+  if { : < /dev/tty; } 2>/dev/null; then
+    printf 'k8s-tools revision to install [%s]: ' "$k8s_tools_ref" > /dev/tty
+    IFS= read -r answer < /dev/tty || answer=
+    [ -z "$answer" ] || k8s_tools_ref=$answer
+  fi
+}
+
+# Replace the installed copy with the tarball of the selected revision; .gitattributes decides what is left out.
+vendor_k8s_tools() {
+  local source_dir archive_url
+  source_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-source.XXXXXX")
+  archive_url=$repository/archive/$k8s_tools_ref.tar.gz
+  echo "Downloading k8s-tools $k8s_tools_ref from $repository"
+  if ! curl -fsSL "$archive_url" -o "$source_dir/k8s-tools.tar.gz"; then
+    rm -rf "$source_dir"
+    echo "Could not download $archive_url" >&2
+    return 1
+  fi
+  mkdir -p "$source_dir/checkout"
+  tar -xzf "$source_dir/k8s-tools.tar.gz" --strip-components=1 -C "$source_dir/checkout"
+  rm -rf "$prefix"
+  mkdir -p "$prefix"
+  cp -R "$source_dir/checkout/." "$prefix/"
+  rm -rf "$source_dir"
+  # Committed with the copy: an update shows as a one-line diff, and update names what it replaced.
+  printf '%s %s\n' "$k8s_tools_ref" "$(date -u +%Y-%m-%d)" > "$prefix/REVISION"
+}
+
+# "v2.0.0 (installed 2026-09-30)" from REVISION, or the source version for copies made before it existed.
+installed_revision() {
+  local ref installed
+  if read -r ref installed < "$prefix/REVISION" 2>/dev/null && [ -n "$ref" ]; then
+    printf '%s (installed %s)\n' "$ref" "$installed"
+  else
+    printf '%s\n' "$(installed_version)"
+  fi
+}
+
+installed_version() {
+  local version
+  version=$(sed -n 's/^tools_version=//p' "$prefix/common" 2>/dev/null)
+  printf '%s\n' "${version:-unknown}"
+}
+
+# Load all functions before replacing files: the update replaces this script itself.
+main() {
+  local mode=update dependency deployment_dir previous_version
+  if [ "${1:-}" = --install ]; then mode=install; shift; fi
+  if [ "${1:-}" = --help ]; then
+    echo "Usage: $mode [DIRECTORY]"
+    echo 'DIRECTORY holds deployments.yaml and the k8s-tools copy (default: where this command is installed).'
+    echo 'K8S_TOOLS_REF=TAG_OR_BRANCH pins the revision; K8S_TOOLS_REF= takes the latest release without asking.'
+    return
+  fi
+  [ "$#" -le 1 ] || { echo "Usage: $mode [DIRECTORY]" >&2; return 1; }
+  for dependency in curl tar jq git realpath; do
+    command -v "$dependency" >/dev/null || { echo "Required command is missing: $dependency" >&2; return 1; }
+  done
+  if [ "$#" -eq 1 ]; then deployment_dir=$1
+  elif [ "$mode" = install ]; then deployment_dir=.
+  else deployment_dir=$(dirname "$(dirname "$(realpath "$0")")"); fi
+  if [ "$mode" = install ]; then mkdir -p "$deployment_dir"; fi
+  [ -d "$deployment_dir" ] || { echo "Directory not found: $deployment_dir" >&2; return 1; }
+  deployment_dir=$(cd "$deployment_dir" && pwd)
+  prefix=$deployment_dir/k8s-tools
+  git -C "$deployment_dir" rev-parse --git-dir >/dev/null 2>&1 || { echo "Not inside a Git repository: $deployment_dir" >&2; return 1; }
+  if [ "$mode" = install ]; then
+    if [ -e "$prefix" ] || [ -L "$prefix" ]; then
+      echo "Already exists: $prefix. Use $prefix/update for an installed copy." >&2
+      return 1
+    fi
+  else
+    if [ ! -d "$prefix" ] || [ -L "$prefix" ]; then
+      echo "No installed copy at $prefix. Run install first." >&2
+      return 1
+    fi
+    if ! git -C "$deployment_dir" diff --quiet || ! git -C "$deployment_dir" diff --cached --quiet; then
+      echo 'Commit or stash your tracked changes before updating.' >&2
+      return 1
+    fi
+    previous_version=$(installed_revision)
+  fi
+  select_revision
+  vendor_k8s_tools
+  bash "$prefix/symlink-commands"
+  if [ "$mode" = install ]; then
+    echo "Installed k8s-tools $(installed_version) ($k8s_tools_ref) under $prefix."
+    echo 'Commit it as ordinary files together with the command symlinks; update with ./k8s-tools/update.'
+    # A wrong yq or an old Helm is better found now than at the first deployment.
+    echo 'Checking dependencies with ./k8s-tools/doctor:'
+    bash "$prefix/doctor" || echo 'Fix the dependency problems above, then run ./k8s-tools/doctor again.' >&2
+  else
+    echo "Updated k8s-tools from $previous_version to $k8s_tools_ref (version $(installed_version))."
+    echo "Review with git diff -- $prefix and https://github.com/cubesystems/k8s-tools/blob/master/CHANGELOG.md, then commit with any new command symlinks."
+  fi
+}
+
+main "$@"

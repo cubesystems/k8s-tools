@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -eo pipefail
+jq -cn --args '$ARGS.positional' -- "$@" >> "$MOCK_HELM_LOG"
+if [ "${1:-}" = upgrade ]; then
+  previous_arg=
+  for mock_arg in "$@"; do
+    if [ "$previous_arg" = --values ] && [[ "$mock_arg" = /dev/fd/* ]]; then cat "$mock_arg" > "$MOCK_HELM_VALUES"; fi
+    previous_arg=$mock_arg
+  done
+fi
+if [ "${1:-}" = get ] && [ "${MOCK_HELM_GET_FAIL:-}" = 1 ]; then
+  echo 'mock: release unavailable' >&2
+  exit 42
+fi
+if [ "${1:-}" = template ]; then exec "$REAL_HELM" "$@"; fi
+if [ "${1:-}" = version ]; then exec "$REAL_HELM" "$@"; fi
+if [ "${1:-}" = get ] && [ "${MOCK_MANIFEST+x}" = x ]; then printf '%s\n' "$MOCK_MANIFEST"; fi
+if [ "${MOCK_HELM_FAIL:-}" = 1 ] && [ "${1:-}" = upgrade ]; then
+  if [ -n "${MOCK_HELM_ERROR:-}" ]; then printf '%s\n' "$MOCK_HELM_ERROR" >&2; fi
+  exit 43
+fi

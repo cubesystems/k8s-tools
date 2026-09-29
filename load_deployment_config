@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Set deployment_name before sourcing. Only request the capabilities a command uses.
+if [ -z "${tools_version:-}" ]; then source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/common"; fi
+load_configuration
+[ -n "${deployment_name:-}" ] || die 'A deployment name is required'
+if ! printf '%s' "$config" | jq -e --arg name "$deployment_name" '.deployments | has($name)' >/dev/null; then
+  printf 'Unknown deployment "%s". Available deployments:\n' "$deployment_name" >&2
+  printf '%s' "$config" | jq -r '.deployments | keys[]' >&2
+  exit 1
+fi
+
+effective_config=$(printf '%s' "$config" | jq -c --arg name "$deployment_name" '
+  ({release, repo, chart, version} | with_entries(select(.value != null))) +
+  (.defaults // {}) + .deployments[$name]')
+deployment_value() { printf '%s' "$effective_config" | jq -r "$1 // empty"; }
+release=${DEPLOY_RELEASE:-$(deployment_value '.release')}
+deployment_namespace=${namespace_override:-$(deployment_value '.namespace')}
+deployment_chart=$(deployment_value '.chart')
+deployment_repo=${chart_repo_override:-$(deployment_value '.repo')}
+deployment_chart_version=${chart_version_override:-$(deployment_value '.version')}
+deployment_key_ref=$(deployment_value '.keyRef')
+deployment_kubeconfig=${kubeconfig_override:-$(deployment_value '.kubeconfig')}
+deployment_context=${context_override:-${DEPLOY_KUBE_CONTEXT:-$(deployment_value '.context')}}
+deployment_create_namespace=$(deployment_value '.createNamespace')
+deployment_timeout=${DEPLOY_TIMEOUT:-$(deployment_value '.timeout')}
+deployment_timeout=${deployment_timeout:-5m}
+deployment_image_tag_path=$(deployment_value '.imageTagPath')
+deployment_image_tag_path=${deployment_image_tag_path:-image.tag}
+deployment_resource_prefix=$(deployment_value '.resourcePrefix')
+
+require_deployment_value() {
+  [ -n "$2" ] || die "\"$1\" is not set for deployment \"$deployment_name\" in $deployments_file"
+}
+
+chart_args=()
+if [ -n "$deployment_chart" ]; then
+  if [ -z "$deployment_repo" ]; then
+    case "$deployment_chart" in
+      oci://*|https://*|http://*|/*) ;;
+      ./*|../*|charts/*|*.tgz) deployment_chart=$(absolute_path "$deployment_chart");;
+      *) if [ -e "$runtime_dir/$deployment_chart" ]; then deployment_chart=$runtime_dir/$deployment_chart; fi;;
+    esac
+  fi
+  chart_args=("$deployment_chart")
+  if [ -n "$deployment_repo" ]; then chart_args+=(--repo "$deployment_repo"); fi
+  if [ -n "$deployment_chart_version" ]; then chart_args+=(--version "$deployment_chart_version"); fi
+fi
+
+if [ -n "${require_chart:-}" ]; then
+  require_deployment_value release "$release"
+  require_deployment_value chart "$deployment_chart"
+  case "$deployment_chart" in /*) [ -e "$deployment_chart" ] || die "Chart not found: $deployment_chart";; esac
+fi
+if [ -n "${require_release:-}" ]; then require_deployment_value release "$release"; fi
+
+load_values_files() {
+  local values_name values_path values_base
+  values_files=()
+  values_args=()
+  values_base=$runtime_dir
+  if [ "$config_version" = 1 ]; then values_base=$runtime_dir/values; fi
+  local values_list
+  values_list=$(printf '%s' "$effective_config" | jq -r '.values // [] | .[]')
+  while IFS= read -r values_name; do
+    [ -n "$values_name" ] || continue
+    case "$values_name" in /*) values_path=$values_name;; *) values_path=$values_base/$values_name;; esac
+    [ -f "$values_path" ] || die "Values file not found for $deployment_name: $values_path"
+    values_path=$(realpath "$values_path")
+    values_files+=("$values_path")
+    values_args+=(--values "$values_path")
+  done <<< "$values_list"
+}
+
+resolve_encryption_key() {
+  local key_ref=$1 key_locator
+  key_locator=${key_ref#*://}
+  case "$key_ref" in
+    file://*)
+      local key_path
+      key_path=$(absolute_path "$key_locator")
+      [ -f "$key_path" ] || die "Encryption key file not found: $key_path"
+      deployment_encryption_key=$(tr -d '\n\r' < "$key_path");;
+    axo://*)
+      need_command ap
+      deployment_encryption_key=$(ap read "$key_ref" | tr -d '\n\r');;
+    *) die "Unsupported keyRef: $key_ref (expected file:// or axo://)";;
+  esac
+  [ -n "$deployment_encryption_key" ] || die "Could not read encryption key from $key_ref"
+}
+
+load_encryption_key() {
+  if [ "${DEPLOY_ENCRYPTION_KEY+x}" = x ]; then
+    [ -n "$DEPLOY_ENCRYPTION_KEY" ] || die 'DEPLOY_ENCRYPTION_KEY is empty'
+    deployment_encryption_key=$DEPLOY_ENCRYPTION_KEY
+  else
+    require_deployment_value keyRef "$deployment_key_ref"
+    resolve_encryption_key "$deployment_key_ref"
+  fi
+}
+
+kube_args=()
+helm_connection_args=()
+if [ -n "${require_cluster:-}" ]; then
+  need_command kubectl
+  require_deployment_value namespace "$deployment_namespace"
+  if [ -n "${DEPLOY_KUBECONFIG:-}" ]; then
+    temporary_file deployment_credentials
+    printf '%s\n' "$DEPLOY_KUBECONFIG" > "$deployment_credentials"
+    export KUBECONFIG=$deployment_credentials
+  elif [ -n "${DEPLOY_KUBECTL_SERVER_URL:-}" ] || [ -n "${DEPLOY_KUBECTL_TOKEN:-}" ]; then
+    [ -n "${DEPLOY_KUBECTL_SERVER_URL:-}" ] && [ -n "${DEPLOY_KUBECTL_TOKEN:-}" ] ||
+      die 'DEPLOY_KUBECTL_SERVER_URL and DEPLOY_KUBECTL_TOKEN must both be supplied'
+    temporary_file deployment_credentials
+    jq -n --arg context "${deployment_context:-deployment}" '{apiVersion:"v1",kind:"Config",
+      clusters:[{name:"deployment",cluster:{server:env.DEPLOY_KUBECTL_SERVER_URL}}],
+      users:[{name:"deployment",user:{token:env.DEPLOY_KUBECTL_TOKEN}}],
+      contexts:[{name:$context,context:{cluster:"deployment",user:"deployment"}}],
+      "current-context":$context}' > "$deployment_credentials"
+    export KUBECONFIG=$deployment_credentials
+  elif [ -n "${DEPLOY_KUBE_CONTEXT:-}" ] && [ -z "${kubeconfig_override:-}" ]; then
+    # DEPLOY_KUBE_CONTEXT exists only in CI, where the GitLab agent provides the connection and the
+    # kubeconfig files used on laptops are not checked in, so a configured file is ignored, as in 1.x.
+    :
+  elif [ -n "$deployment_kubeconfig" ]; then
+    deployment_kubeconfig=$(absolute_path "$deployment_kubeconfig")
+    [ -f "$deployment_kubeconfig" ] || die "Kubeconfig not found: $deployment_kubeconfig"
+    export KUBECONFIG=$deployment_kubeconfig
+  elif [ -z "$deployment_context" ] && [ "$(deployment_value '.useCurrentContext')" != true ]; then
+    current_context=$(kubectl config current-context 2>/dev/null || true)
+    if [ -n "$current_context" ]; then
+      die "No context configured for $deployment_name. Current kubectl context is $current_context: set \"context: $current_context\", or \"useCurrentContext: true\" to always follow the current context"
+    fi
+    die "No context configured for $deployment_name and kubectl has no current context: set context, kubeconfig, or useCurrentContext: true"
+  fi
+  # GitLab agent jobs provide a group-readable kubeconfig, which Helm warns about on every call.
+  if [ -n "${DEPLOY_KUBE_CONTEXT:-}" ] && [ -n "${KUBECONFIG:-}" ] && [ -f "$KUBECONFIG" ] && [ -w "$KUBECONFIG" ]; then
+    chmod 600 "$KUBECONFIG" 2>/dev/null || true
+  fi
+  if [ -z "$deployment_context" ]; then deployment_context=$(kubectl config current-context); fi
+  [ -n "$deployment_context" ] || die "No Kubernetes context selected for $deployment_name"
+  kube_args=(--context "$deployment_context" --namespace "$deployment_namespace")
+  helm_connection_args=(--kube-context "$deployment_context" --namespace "$deployment_namespace")
+fi
+
+if [ -n "${require_encryption_key:-}" ]; then load_encryption_key; fi
+
+# Workloads of the installed release as kind/name lines, e.g. deployment/web.
+release_workloads() {
+  helm get manifest "$release" "${helm_connection_args[@]}" | yq -o=json -I=0 '.' | jq -r '
+    select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "DaemonSet" or .kind == "Pod" or .kind == "Job") |
+    (.kind | ascii_downcase) + "/" + .metadata.name'
+}
+
+# kubectl exec that allocates a TTY only when both stdin and stdout are terminals.
+# Usage: exec_in_pod [-c CONTAINER] RESOURCE -- COMMAND...
+exec_in_pod() {
+  local tty_args=(-i)
+  if [ -t 0 ] && [ -t 1 ]; then tty_args+=(-t); fi
+  kubectl "${kube_args[@]}" exec "${tty_args[@]}" "$@"
+}
+
+print_target() {
+  printf 'Deployment: %s | context: %s | namespace: %s | release: %s\n' \
+    "$deployment_name" "$deployment_context" "$deployment_namespace" "$release" >&2
+  if [ -n "$deployment_chart" ]; then
+    printf 'Chart: %s | version: %s\n' "$deployment_chart" "${deployment_chart_version:-chart default/latest}" >&2
+  fi
+}

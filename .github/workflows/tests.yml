@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+      - uses: azure/setup-kubectl@v5
+        with:
+          version: v1.31.4
+      - name: Install yq
+        run: |
+          case "$(uname -m)" in x86_64) arch=amd64;; arm64|aarch64) arch=arm64;; *) echo "Unsupported arch: $(uname -m)" >&2; exit 1;; esac
+          os=$(uname -s | tr '[:upper:]' '[:lower:]')
+          curl -fsSL -o /tmp/yq "https://github.com/mikefarah/yq/releases/download/v4.44.6/yq_${os}_${arch}"
+          chmod +x /tmp/yq
+          sudo mv /tmp/yq /usr/local/bin/yq
+          yq --version
+      - name: Show tool versions
+        run: |
+          bash --version | head -n 1
+          helm version --short
+          kubectl version --client
+          jq --version
+      - name: Run tests
+        run: bash tests/run
