@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "k8s-tools deployments",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deployments"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schemaVersion": {"const": 2},
+    "defaults": {"$ref": "#/$defs/settings"},
+    "deployments": {"type": "object", "minProperties": 1, "propertyNames": {"minLength": 1, "pattern": "^[^\r\n\t]+$"}, "additionalProperties": {"$ref": "#/$defs/settings"}},
+    "release": {"$ref": "#/$defs/text"},
+    "chart": {"$ref": "#/$defs/text"},
+    "repo": {"$ref": "#/$defs/text"},
+    "version": {"$ref": "#/$defs/text"}
+  },
+  "allOf": [{
+    "if": {"required": ["schemaVersion"]},
+    "then": {"not": {"anyOf": [{"required": ["release"]}, {"required": ["chart"]}, {"required": ["repo"]}, {"required": ["version"]}]}}
+  }],
+  "$defs": {
+    "text": {"type": ["string", "null"], "minLength": 1},
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "release": {"$ref": "#/$defs/text"},
+        "namespace": {"$ref": "#/$defs/text"},
+        "chart": {"$ref": "#/$defs/text"},
+        "repo": {"$ref": "#/$defs/text"},
+        "version": {"$ref": "#/$defs/text"},
+        "kubeconfig": {"$ref": "#/$defs/text"},
+        "context": {"$ref": "#/$defs/text"},
+        "keyRef": {"$ref": "#/$defs/text"},
+        "timeout": {"$ref": "#/$defs/text"},
+        "imageTagPath": {"$ref": "#/$defs/text"},
+        "resourcePrefix": {"$ref": "#/$defs/text"},
+        "createNamespace": {"type": ["boolean", "null"]},
+        "useCurrentContext": {"type": ["boolean", "null"]},
+        "rollbackOnFailure": {"type": ["boolean", "null"]},
+        "values": {"type": ["array", "null"], "items": {"type": "string", "minLength": 1, "pattern": "^[^\r\n]+$"}}
+      }
+    }
+  }
+}

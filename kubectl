@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-
-if [ "$#" -lt 1 ]; then
-  echo "Usage: $0 ENVIRONMENT" >&2
-  exit 1
-fi
-
-# exit on any failing command
-set -e
-
-environment_name=$1
-kubectl_args=${@:2}
-
-# common call
-source $(dirname $(realpath ${0}))/load_environment_config
-
-kubectl -n ${environment_namespace} ${kubectl_args}
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+require_usage 1 'DEPLOYMENT KUBECTL_ARGS...' "$@"
+deployment_name=$1
+shift
+require_cluster=1
+source "$tools_dir/load_deployment_config"
+kubectl "${kube_args[@]}" "$@"

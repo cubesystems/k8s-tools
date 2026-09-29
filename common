@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Shared shell functions; commands remain independently executable.
+set -eo pipefail
+tools_dir=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+runtime_dir=$(realpath "$(dirname "$0")")
+tools_version=2.0.0
+temporary_files=()
+temporary_dirs=()
+# Commands linked into projects. Completion skips the ones without a DEPLOYMENT argument.
+tool_commands=(attach deploy kubectl secrets preview config list doctor init status logs exec history rollback completion update)
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+need_command() { command -v "$1" >/dev/null || die "Required command '$1' is missing; run ./doctor for setup instructions"; }
+
+cleanup_temporary() {
+  local temporary_path
+  for temporary_path in "${temporary_files[@]}"; do rm -f -- "$temporary_path"; done
+  for temporary_path in "${temporary_dirs[@]}"; do rmdir -- "$temporary_path" 2>/dev/null || printf 'Temporary directory contains files left by your editor: %s\n' "$temporary_path" >&2; done
+}
+
+temporary_file() {
+  local allocated_file
+  allocated_file=$(mktemp "${2:-${TMPDIR:-/tmp}/k8s-tools.XXXXXX}")
+  chmod 600 "$allocated_file"
+  temporary_files+=("$allocated_file")
+  printf -v "$1" '%s' "$allocated_file"
+  trap cleanup_temporary EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+# Common options precede the deployment/action, so forwarded tool options are untouched.
+parse_common_options() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --config)
+        [ "$#" -ge 2 ] || die '--config requires a filename'
+        export K8S_TOOLS_CONFIG=$2
+        shift 2;;
+      --version) echo "$tools_version"; exit 0;;
+      *) break;;
+    esac
+  done
+  command_args=("$@")
+  common_options_parsed=true
+}
+
+# Prints usage on --help, or fails when fewer than MIN arguments are given. Extra help lines
+# come from usage_help. The --config option is shown when parse_common_options has run.
+# Usage: require_usage MIN 'DEPLOYMENT [OPTIONS]' "$@"
+require_usage() {
+  local minimum=$1 arguments=$2 usage="Usage: $0"
+  shift 2
+  if [ "${common_options_parsed:-}" = true ]; then usage="$usage [--config FILE]"; fi
+  usage="$usage $arguments"
+  if [ "${1:-}" = --help ]; then
+    printf '%s\n' "$usage"
+    [ -z "${usage_help:-}" ] || printf '%s\n' "$usage_help"
+    exit 0
+  fi
+  [ "$#" -ge "$minimum" ] || die "$usage"
+}
+
+absolute_path() {
+  case "$1" in /*) printf '%s\n' "$1";; *) printf '%s/%s\n' "$runtime_dir" "$1";; esac
+}
+
+read_yaml_json() {
+  yq -o=json -I=0 '.' "$1" | jq -sc '
+    if length != 1 or (.[0] | type) != "object" then error("Expected one YAML mapping") else .[0] end'
+}
+
+find_configuration() {
+  local candidate_dir
+  if [ -n "${K8S_TOOLS_CONFIG:-}" ]; then
+    deployments_file=$K8S_TOOLS_CONFIG
+  elif [ -f "$runtime_dir/deployments.yaml" ]; then
+    deployments_file=$runtime_dir/deployments.yaml
+  else
+    candidate_dir=$PWD
+    while :; do
+      if [ -f "$candidate_dir/deployments.yaml" ]; then deployments_file=$candidate_dir/deployments.yaml; break; fi
+      if [ -f "$candidate_dir/k8s/deployments.yaml" ]; then deployments_file=$candidate_dir/k8s/deployments.yaml; break; fi
+      [ "$candidate_dir" != / ] || die 'No deployments.yaml found; use --config FILE or run init'
+      candidate_dir=$(dirname "$candidate_dir")
+    done
+  fi
+  [ -f "$deployments_file" ] || die "Configuration file not found: $deployments_file"
+  deployments_file=$(realpath "$deployments_file")
+  runtime_dir=$(dirname "$deployments_file")
+  export K8S_TOOLS_CONFIG=$deployments_file
+}
+
+load_configuration() {
+  need_command yq
+  need_command jq
+  yq --version | grep -Eq 'mikefarah/yq.*version v4\.' || die 'Mike Farah yq v4 is required (not the Python yq package)'
+  find_configuration
+  config=$(read_yaml_json "$deployments_file")
+  printf '%s' "$config" | jq -e -f "$tools_dir/validate_config.jq" >/dev/null
+  config_version=$(printf '%s' "$config" | jq -r '.schemaVersion // 1')
+}

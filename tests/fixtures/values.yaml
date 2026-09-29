@@ -1,0 +1,9 @@
+# Preserve this document comment.
+resourcePrefix: configured
+secrets:
+  app-config:
+    type: Opaque
+    data:
+      # Preserve this secret comment.
+      ORIGINAL: original-value
+      UNCHANGED: unchanged-value

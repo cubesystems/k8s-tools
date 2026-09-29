@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-
-current_file=`realpath $0`
-base_dir=`dirname ${current_file}`
-base_dir_name=`basename ${base_dir}`
-
-commands=("attach deploy kubectl secrets")
-
-for command in ${commands}; do
-  if [ ! -f ${command} ]; then
-    ln -s ${base_dir_name}/${command} ${command}
-    echo "${command} linked to ${base_dir_name}/${command}"
+source "$(dirname "$(realpath "$0")")/common"
+require_usage 0 '[DIRECTORY]' "$@"
+[ "$#" -le 1 ] || die "Usage: $0 [DIRECTORY]"
+target_dir=$(realpath "${1:-.}")
+[ -d "$target_dir" ] || die "Directory not found: $target_dir"
+link_base=$tools_dir
+if [ "$(dirname "$tools_dir")" = "$target_dir" ]; then link_base=$(basename "$tools_dir"); fi
+for command_name in "${tool_commands[@]}"; do
+  target=$target_dir/$command_name
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    printf 'Keeping existing command: %s\n' "$target"
+  else
+    ln -s "$link_base/$command_name" "$target"
+    printf '%s linked to %s/%s\n' "$command_name" "$link_base" "$command_name"
   fi
 done

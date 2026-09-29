@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Vendors one revision of k8s-tools as plain files. `install` runs this with --install from a fresh checkout.
+set -eo pipefail
+repository=git@github.com:cubesystems/k8s-tools.git
+prefix=k8s/k8s-tools
+
+# Highest vX.Y.Z tag; sorted numerically per part because macOS sort has no -V.
+latest_release_tag() {
+  git ls-remote --tags --refs "$repository" 'refs/tags/v*' |
+    sed -n 's,.*refs/tags/v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$,\1,p' |
+    sort -t . -k1,1n -k2,2n -k3,3n | tail -n 1 | sed 's/^/v/'
+}
+
+# K8S_TOOLS_REF pins a tag or branch; set but empty takes the latest release without asking.
+select_revision() {
+  local answer
+  if [ "${K8S_TOOLS_REF+x}" = x ] && [ -n "$K8S_TOOLS_REF" ]; then k8s_tools_ref=$K8S_TOOLS_REF; return; fi
+  k8s_tools_ref=$(latest_release_tag)
+  if [ -z "$k8s_tools_ref" ]; then echo 'No release tags found; using master.' >&2; k8s_tools_ref=master; fi
+  [ "${K8S_TOOLS_REF+x}" = x ] && return
+  # Read the answer from the terminal: under curl | bash, stdin carries the installer script.
+  if { : < /dev/tty; } 2>/dev/null; then
+    printf 'k8s-tools revision to install [%s]: ' "$k8s_tools_ref" > /dev/tty
+    IFS= read -r answer < /dev/tty || answer=
+    [ -z "$answer" ] || k8s_tools_ref=$answer
+  fi
+}
+
+# Replace the installed copy with an export of the selected revision; .gitattributes decides what is left out.
+vendor_k8s_tools() {
+  local source_dir
+  source_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-source.XXXXXX")
+  if ! git clone --quiet --depth 1 --branch "$k8s_tools_ref" "$repository" "$source_dir/checkout" 2> "$source_dir/clone.log"; then
+    cat "$source_dir/clone.log" >&2
+    rm -rf "$source_dir"
+    echo "Could not fetch k8s-tools revision $k8s_tools_ref." >&2
+    return 1
+  fi
+  vendored_revision=$(git -C "$source_dir/checkout" rev-parse --short HEAD)
+  rm -rf "$prefix"
+  mkdir -p "$prefix"
+  git -C "$source_dir/checkout" archive HEAD | tar -x -C "$prefix"
+  rm -rf "$source_dir"
+}
+
+installed_version() {
+  local version
+  version=$(sed -n 's/^tools_version=//p' "$prefix/common" 2>/dev/null)
+  printf '%s\n' "${version:-unknown}"
+}
+
+# Load all functions before replacing files: the update replaces this script itself.
+main() {
+  local mode=update dependency project_root previous_version
+  if [ "${1:-}" = --install ]; then mode=install; shift; fi
+  if [ "${1:-}" = --help ]; then
+    echo "Usage: $mode [PROJECT_DIRECTORY]"
+    echo 'K8S_TOOLS_REF=TAG_OR_BRANCH pins the revision; K8S_TOOLS_REF= takes the latest release without asking.'
+    return
+  fi
+  [ "$#" -le 1 ] || { echo "Usage: $mode [PROJECT_DIRECTORY]" >&2; return 1; }
+  for dependency in git realpath tar; do
+    command -v "$dependency" >/dev/null || { echo "Required command is missing: $dependency" >&2; return 1; }
+  done
+  project_root=$(git -C "${1:-.}" rev-parse --show-toplevel)
+  cd "$project_root"
+  if [ "$mode" = install ]; then
+    if [ -e "$prefix" ] || [ -L "$prefix" ]; then
+      echo "Already exists: $prefix. Use ./k8s/update for an installed copy." >&2
+      return 1
+    fi
+  else
+    if [ ! -d "$prefix" ] || [ -L "$prefix" ]; then
+      echo "No installed copy at $prefix. Run install first." >&2
+      return 1
+    fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+      echo 'Commit or stash your tracked changes before updating.' >&2
+      return 1
+    fi
+    previous_version=$(installed_version)
+  fi
+  select_revision
+  vendor_k8s_tools
+  bash "$prefix/symlink-commands" "$project_root/k8s"
+  if [ "$mode" = install ]; then
+    echo "Installed k8s-tools $(installed_version) ($k8s_tools_ref, commit $vendored_revision) under $prefix."
+    echo 'Commit it as ordinary files together with the command symlinks; update with ./k8s/update.'
+    # A wrong yq or an old Helm is better found now than at the first deployment.
+    echo 'Checking dependencies with ./k8s/doctor:'
+    bash "$prefix/doctor" || echo 'Fix the dependency problems above, then run ./k8s/doctor again.' >&2
+  else
+    echo "Updated k8s-tools from $previous_version to $(installed_version) ($k8s_tools_ref, commit $vendored_revision)."
+    echo "Review with git diff -- $prefix and https://github.com/cubesystems/k8s-tools/blob/master/CHANGELOG.md, then commit with any new command symlinks."
+  fi
+}
+
+main "$@"

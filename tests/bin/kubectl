@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -eo pipefail
+jq -cn --args '$ARGS.positional' -- "$@" >> "$MOCK_KUBECTL_LOG"
+if [ -n "${MOCK_CREDENTIALS_LOG:-}" ]; then
+  [ -f "$KUBECONFIG" ]
+  if mock_permissions=$(stat -c %a "$KUBECONFIG" 2>/dev/null); then :;
+  else mock_permissions=$(stat -f %Lp "$KUBECONFIG"); fi
+  [ "$mock_permissions" = 600 ]
+  printf '%s\n' "$KUBECONFIG" > "$MOCK_CREDENTIALS_LOG"
+  if [ -n "${DEPLOY_KUBECTL_TOKEN:-}" ]; then
+    jq -e '.contexts[0].name == "mock-context" and .users[0].user.token == "fixture-token"' "$KUBECONFIG" >/dev/null
+  fi
+fi
+if [ "${MOCK_KUBECTL_FAIL:-}" = 1 ]; then exit 44; fi
+case " $* " in
+  *' get pods '*)
+    if [ -n "${MOCK_PODS:-}" ]; then printf '%s\n' "$MOCK_PODS"; else echo '{"items":[]}'; fi;;
+  *' config current-context '*) echo mock-context;;
+  *' config view '*) echo '{"clusters":[{"name":"mock","cluster":{"server":"https://mock.invalid"}}]}' ;;
+esac

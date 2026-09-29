@@ -1,0 +1,7 @@
+release: sample
+chart: charts/sample
+defaults:
+  namespace: sample
+  context: mock-context
+deployments:
+  test: {}

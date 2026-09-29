@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+require_usage 1 'show DEPLOYMENT [--json] | validate [DEPLOYMENT]' "$@"
+action=$1
+case "$action" in
+  show)
+    [ "$#" -ge 2 ] || die 'Usage: config show DEPLOYMENT [--json]'
+    deployment_name=$2
+    source "$tools_dir/load_deployment_config"
+    load_values_files
+    values_json=$(printf '%s\n' "${values_files[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')
+    resolved=$(printf '%s' "$effective_config" | jq --arg file "$deployments_file" --arg name "$deployment_name" \
+      --arg release "$release" --arg chart "$deployment_chart" --arg context "$deployment_context" \
+      --arg timeout "$deployment_timeout" --argjson files "$values_json" \
+      '. + {configuration:$file,deployment:$name,release:$release,chart:$chart,context:$context,timeout:$timeout,values:$files}')
+    if [ "${3:-}" = --json ]; then printf '%s\n' "$resolved"; else printf '%s' "$resolved" | yq -P -p=json '.'; fi;;
+  validate)
+    load_configuration
+    if [ -n "${2:-}" ]; then names=$2; else names=$(printf '%s' "$config" | jq -r '.deployments | keys[]'); fi
+    while IFS= read -r deployment_name; do
+      source "$tools_dir/load_deployment_config"
+      load_values_files
+      for values_file in "${values_files[@]}"; do read_yaml_json "$values_file" >/dev/null; done
+      case "$deployment_chart" in /*) [ -e "$deployment_chart" ] || die "Chart not found: $deployment_chart";; esac
+      printf '%s: configuration valid\n' "$deployment_name"
+    done <<< "$names"
+    if [ "$config_version" = 1 ]; then
+      echo 'Legacy paths: values are relative to values/. See README before switching to schemaVersion: 2.' >&2
+    fi;;
+  *) die 'Usage: config show DEPLOYMENT [--json] | validate [DEPLOYMENT]';;
+esac

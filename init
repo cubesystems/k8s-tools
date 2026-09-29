@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+require_usage 0 '[DIRECTORY]' "$@"
+[ "$#" -le 1 ] || die "Usage: $0 [DIRECTORY]"
+target_dir=${1:-$runtime_dir}
+[ ! -e "$target_dir/deployments.yaml" ] || die "Already exists: $target_dir/deployments.yaml"
+[ ! -e "$target_dir/values/common.yaml" ] || die "Already exists: $target_dir/values/common.yaml"
+mkdir -p "$target_dir/values"
+cp "$tools_dir/templates/deployments.yaml" "$target_dir/deployments.yaml"
+cp "$tools_dir/templates/common.yaml" "$target_dir/values/common.yaml"
+touch "$target_dir/.gitignore"
+for ignore_pattern in 'keys/' '*.kubeconfig*' '.k8s-tools.*' '.secrets-rekey.*/'; do
+  if ! grep -qxF "$ignore_pattern" "$target_dir/.gitignore"; then printf '\n%s\n' "$ignore_pattern" >> "$target_dir/.gitignore"; fi
+done
+printf 'Created %s/deployments.yaml and values/common.yaml. Set your chart and context, then run doctor test.\n' "$target_dir"

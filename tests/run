@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+set -eo pipefail
+test_tools=$(cd "$(dirname "$0")/.." && pwd)
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-tests.XXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+export REAL_HELM=$(command -v helm)
+export PATH="$test_tools/tests/bin:$PATH"
+export MOCK_HELM_LOG="$test_dir/helm.jsonl" MOCK_KUBECTL_LOG="$test_dir/kubectl.jsonl" MOCK_HELM_VALUES="$test_dir/helm-values.json"
+unset CI KUBECONFIG DEPLOY_KUBECONFIG DEPLOY_KUBE_CONTEXT DEPLOY_ENCRYPTION_KEY
+unset K8S_TOOLS_CONFIG DEPLOY_RELEASE DEPLOY_TIMEOUT DEPLOY_RESOURCE_PREFIX DEPLOY_KUBECTL_SERVER_URL DEPLOY_KUBECTL_TOKEN
+test_project="$test_dir/project with spaces"
+mkdir -p "$test_project/charts/sample"
+cp -R "$test_tools/tests/fixtures/chart/." "$test_project/charts/sample/"
+cp "$test_tools/tests/fixtures/deployments.yaml" "$test_project/deployments.yaml"
+for test_command in deploy kubectl attach; do ln -s "$test_tools/$test_command" "$test_project/$test_command"; done
+touch "$MOCK_HELM_LOG" "$MOCK_KUBECTL_LOG"
+
+assert_log() { jq -es "$2" "$1" > /dev/null; }
+file_mode() {
+  local mode
+  if mode=$(stat -c %a "$1" 2>/dev/null); then :;
+  else mode=$(stat -f %Lp "$1"); fi
+  printf '%s\n' "$mode"
+}
+expect_failure() {
+  local test_status=0
+  "$@" > "$test_dir/stdout" 2> "$test_dir/stderr" || test_status=$?
+  last_test_status=$test_status
+  if [ "$test_status" -eq 0 ]; then echo "Expected failure: $*" >&2; exit 1; fi
+}
+
+"$test_project/kubectl" test exec demo -- sh -c 'printf "hello world"'
+assert_log "$MOCK_KUBECTL_LOG" '.[-1][-1] == "printf \"hello world\""'
+echo 'ok: kubectl preserves quoted arguments and project paths with spaces'
+
+"$test_project/deploy" test 001 --timeout 10m --set-string 'message=hello world'
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("--wait") != null and index("--wait-for-jobs") != null and index("message=hello world") != null and index("image.tag=\"001\"") != null'
+"$test_project/deploy" test v1 --no-wait
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("--wait") == null and index("--no-wait") == null'
+echo 'ok: extra Helm arguments keep readiness waiting; --no-wait opts out'
+
+export MOCK_PODS='{"items":[]}'
+expect_failure "$test_project/attach" test absent
+export MOCK_PODS='{"items":[{"metadata":{"name":"web-a"},"status":{"phase":"Running"}},{"metadata":{"name":"web-b"},"status":{"phase":"Running"}}]}'
+expect_failure "$test_project/attach" test web
+"$test_project/attach" test web-a sh -c 'echo hello world'
+assert_log "$MOCK_KUBECTL_LOG" '.[-1][-1] == "echo hello world" and (.[-1] | index("-it")) == null'
+echo 'ok: attach requires an unambiguous pod and preserves command arguments'
+
+export MOCK_KUBECTL_FAIL=1
+expect_failure "$test_project/attach" test web
+unset MOCK_KUBECTL_FAIL
+echo 'ok: kubectl failures are not reported as missing pods'
+
+cp "$test_project/deployments.yaml" "$test_dir/legacy.yaml"
+yq -i 'del(.release, .chart) | .defaults.keyRef = "file://missing.key"' "$test_project/deployments.yaml"
+CI=1 "$test_project/kubectl" test get pods >/dev/null
+assert_log "$MOCK_KUBECTL_LOG" 'all(.[]; index("use-context") == null)'
+echo 'ok: kubectl needs neither chart nor encryption key, including in CI'
+cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"
+yq -i 'del(.defaults.context)' "$test_project/deployments.yaml"
+expect_failure "$test_project/kubectl" test get pods
+grep -q 'Current kubectl context is mock-context' "$test_dir/stderr"
+grep -q '"context: mock-context"' "$test_dir/stderr"
+bash "$test_tools/list" --config "$test_project/deployments.yaml" | awk -F '\t' 'NR == 2 && $2 == "current (explicit opt-in required)" {found = 1} END {exit !found}'
+yq -i '.defaults.useCurrentContext = true' "$test_project/deployments.yaml"
+"$test_project/kubectl" test get pods >/dev/null
+bash "$test_tools/list" --config "$test_project/deployments.yaml" | awk -F '\t' 'NR == 2 && $2 == "current" {found = 1} END {exit !found}'
+echo 'ok: current context requires an explicit opt-in, which the refusal and list describe'
+cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"
+yq -i '.defaults.createNamespace = true | .deployments.test.createNamespace = false' "$test_project/deployments.yaml"
+"$test_project/deploy" test
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("--create-namespace") == null and all(.[]; startswith("image.tag=") == false and startswith("appVersion=") == false and startswith("resourcePrefix=") == false)'
+echo 'ok: chart-only deployment preserves defaults and explicit false overrides'
+yq -i '.defaults.namespce = "typo"' "$test_project/deployments.yaml"
+expect_failure "$test_project/kubectl" test get pods
+cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"
+yq -i '.schemaVersion = 2 | .defaults.release = .release | .defaults.chart = .chart | del(.release, .chart)' "$test_project/deployments.yaml"
+bash "$test_tools/config" --config "$test_project/deployments.yaml" validate test >/dev/null
+echo 'ok: schemaVersion 2 supports uniform defaults and rejects unknown fields'
+cp "$test_project/deployments.yaml" "$test_dir/schema2.yaml"
+for invalid_defaults in false null '[]'; do
+  yq -i ".defaults = $invalid_defaults" "$test_project/deployments.yaml"
+  expect_failure bash "$test_tools/config" --config "$test_project/deployments.yaml" validate
+done
+cp "$test_dir/schema2.yaml" "$test_project/deployments.yaml"
+export K8S_TOOLS_CONFIG="$test_project/deployments.yaml"
+
+"$test_project/deploy" test --namespace override-ns --kube-context override-context >/dev/null 2>"$test_dir/target"
+grep -q 'context: override-context | namespace: override-ns' "$test_dir/target"
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("override-ns") != null and index("override-context") != null'
+MOCK_HELM_VERSION=v3.14.0 "$test_project/deploy" test --rollback-on-failure
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("--atomic") != null'
+MOCK_HELM_VERSION=v4.0.0 "$test_project/deploy" test --rollback-on-failure
+assert_log "$MOCK_HELM_LOG" '.[-1] | index("--rollback-on-failure") != null'
+expect_failure "$test_project/deploy" test --rollback-on-failure --no-wait
+expect_failure "$test_project/deploy" test -- --reuse-values=true
+MOCK_HELM_FAIL=1 MOCK_KUBECTL_FAIL=1 expect_failure "$test_project/deploy" test
+[ "$last_test_status" = 43 ]
+grep -q 'Could not fetch pod diagnostics' "$test_dir/stderr"
+MOCK_MANIFEST=$'kind: Deployment\nmetadata:\n  name: web' MOCK_HELM_FAIL=1 expect_failure "$test_project/deploy" test
+grep -qx 'deployment/web' "$test_dir/stderr"
+assert_log "$MOCK_KUBECTL_LOG" '.[-2] | index("get") != null and index("pods") != null and index("-l") == null and index("--request-timeout=10s") != null'
+assert_log "$MOCK_KUBECTL_LOG" '.[-1] | index("events") != null'
+echo 'ok: target overrides, rollback flag selection, reuse guards, and deployment failure diagnostics'
+
+export MOCK_CREDENTIALS_LOG="$test_dir/credentials-path"
+DEPLOY_KUBECONFIG=fixture-credentials "$test_project/kubectl" test get pods >/dev/null
+[ ! -e "$(cat "$MOCK_CREDENTIALS_LOG")" ]
+DEPLOY_KUBECONFIG=fixture-credentials MOCK_KUBECTL_FAIL=1 expect_failure "$test_project/kubectl" test get pods
+[ ! -e "$(cat "$MOCK_CREDENTIALS_LOG")" ]
+DEPLOY_KUBECTL_SERVER_URL=https://fixture.invalid DEPLOY_KUBECTL_TOKEN=fixture-token "$test_project/kubectl" test get pods >/dev/null
+[ ! -e "$(cat "$MOCK_CREDENTIALS_LOG")" ]
+if grep -q fixture-token "$MOCK_KUBECTL_LOG"; then echo 'Token leaked into argv' >&2; exit 1; fi
+unset MOCK_CREDENTIALS_LOG
+echo 'ok: generated credentials are private and removed on success and failure'
+
+export MOCK_MANIFEST=$'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: migration'
+for test_action in status history; do
+  bash "$test_tools/$test_action" test
+  assert_log "$MOCK_HELM_LOG" ".[-1][0] == \"$test_action\" and .[-1][1] == \"sample\""
+done
+bash "$test_tools/rollback" test 3
+assert_log "$MOCK_HELM_LOG" '.[-1][0:3] == ["rollback","sample","3"] and (.[-1] | index("--wait")) != null'
+expect_failure bash "$test_tools/rollback" test invalid
+bash "$test_tools/logs" test -f -c app
+assert_log "$MOCK_KUBECTL_LOG" '.[-1][-5:] == ["logs","job/migration","-f","-c","app"]'
+bash "$test_tools/exec" test -c app -- sh -c 'echo hello world'
+assert_log "$MOCK_KUBECTL_LOG" '.[-1][-1] == "echo hello world" and (.[-1] | index("-i")) != null and (.[-1] | index("-t")) == null'
+MOCK_MANIFEST="$MOCK_MANIFEST"$'\n---\nkind: Deployment\nmetadata:\n  name: web' expect_failure bash "$test_tools/logs" test
+MOCK_HELM_GET_FAIL=1 expect_failure bash "$test_tools/exec" test
+unset MOCK_MANIFEST
+echo 'ok: release commands, resource selection, containers, and non-TTY exec'
+
+bash "$test_tools/config" show test --json | jq -e '.chart | endswith("/charts/sample")' >/dev/null
+bash "$test_tools/list" --names | grep -qx test
+bash "$test_tools/doctor" test >/dev/null
+bash "$test_tools/init" "$test_dir/new project"
+expect_failure bash "$test_tools/init" "$test_dir/new project"
+mkdir -p "$test_dir/init project/k8s"
+ln -s "$test_tools/init" "$test_dir/init project/k8s/init"
+(cd "$test_dir/init project" && ./k8s/init)
+[ -f "$test_dir/init project/k8s/deployments.yaml" ]
+[ -f "$test_dir/init project/k8s/values/common.yaml" ]
+[ ! -e "$test_dir/init project/deployments.yaml" ]
+[ ! -e "$test_dir/init project/values" ]
+echo 'ok: init defaults to the invoked command directory and still accepts an explicit directory'
+printf 'custom fork\n' > "$test_dir/new project/deploy"
+bash "$test_tools/symlink-commands" "$test_dir/new project" >/dev/null
+grep -qx 'custom fork' "$test_dir/new project/deploy"
+[ -L "$test_dir/new project/secrets" ]
+bash "$test_tools/completion" bash | bash -n
+completion_output=$(bash "$test_tools/completion" bash)
+grep -q 'complete .*/rollback$' <<< "$completion_output"
+if grep -q '/init$' <<< "$completion_output"; then echo 'init should not get deployment completion' >&2; exit 1; fi
+for help_command in deploy secrets attach list init; do
+  [ "$(bash "$test_tools/$help_command" --help | head -n 1 | cut -c 1-7)" = 'Usage: ' ]
+done
+expect_failure bash "$test_tools/attach" test
+grep -q '^Usage: .*DEPLOYMENT POD_NAME' "$test_dir/stderr"
+if command -v zsh >/dev/null; then bash "$test_tools/completion" zsh | zsh -n; fi
+echo 'ok: diagnostics, scaffolding, completion syntax, and preservation of forked commands'
+bash "$test_tools/tests/install-update"
+
+mkdir -p "$test_project/values" "$test_project/keys"
+cp "$test_tools/tests/fixtures/values.yaml" "$test_project/values/test.yaml"
+printf 'old-fixture-key\n' > "$test_project/keys/old.key"
+printf 'new-fixture-key\n' > "$test_project/keys/new.key"
+yq -i '.defaults.keyRef = "file://keys/old.key" | .deployments.test.values = ["values/test.yaml"]' "$test_project/deployments.yaml"
+export K8S_TOOLS_CONFIG="$test_project/deployments.yaml"
+chmod 644 "$test_project/values/test.yaml"
+(
+  source "$test_tools/common"
+  source "$test_tools/edit_secret_file"
+  values_path="$test_project/values/test.yaml"
+  read_secret_file
+  [ "$(file_mode "$original_file")" = 600 ]
+  [ "$original_mode" = 644 ]
+  cmp "$values_path" "$original_file"
+  printf '%s\n' "$original_file" > "$test_dir/snapshot-path"
+)
+[ ! -e "$(cat "$test_dir/snapshot-path")" ]
+bash "$test_tools/secrets" encrypt test "$test_project/values/test.yaml" --in-place
+[ "$(file_mode "$test_project/values/test.yaml")" = 644 ]
+echo 'ok: plaintext snapshots stay private, are cleaned up, and encrypted replacements retain source permissions'
+encrypted_before=$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")
+printf 'line one\nline two\n' | bash "$test_tools/secrets" set test --file "$test_project/values/test.yaml" --secret app-config --key MULTILINE --stdin
+bash "$test_tools/secrets" decrypt test "$test_project/values/test.yaml" | yq -o=json '.' | jq -e '.secrets["app-config"].data.MULTILINE == "line one\nline two\n"' >/dev/null
+[ "$encrypted_before" = "$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")" ]
+grep -q '# Preserve this document comment.' "$test_project/values/test.yaml"
+grep -q '# Preserve this secret comment.' "$test_project/values/test.yaml"
+echo 'ok: secrets set preserves multiline bytes, comments, and unrelated ciphertext'
+printf 'positional' | bash "$test_tools/secrets" set test "$test_project/values/test.yaml" --secret app-config --key POSITIONAL --stdin
+printf 'implicit' | bash "$test_tools/secrets" set test --secret app-config --key IMPLICIT --stdin 2> "$test_dir/stderr"
+grep -qF "Using $(realpath "$test_project/values/test.yaml")" "$test_dir/stderr"
+bash "$test_tools/secrets" decrypt test | yq -o=json '.' | jq -e '.secrets["app-config"].data | .POSITIONAL == "positional" and .IMPLICIT == "implicit"' >/dev/null
+cp "$test_project/values/test.yaml" "$test_project/values/second.yaml"
+cp "$test_project/deployments.yaml" "$test_dir/single-values.yaml"
+yq -i '.deployments.test.values += ["values/second.yaml"]' "$test_project/deployments.yaml"
+printf 'ambiguous' | expect_failure bash "$test_tools/secrets" set test --secret app-config --key AMBIGUOUS --stdin
+grep -q 'values/test.yaml' "$test_dir/stderr" && grep -q 'values/second.yaml' "$test_dir/stderr"
+cp "$test_dir/single-values.yaml" "$test_project/deployments.yaml"
+rm "$test_project/values/second.yaml"
+echo 'ok: secrets accept a positional file, default to the only values file, and refuse to guess between several'
+
+export EDITOR="$test_tools/tests/editor"
+unset VISUAL
+cp "$test_project/values/test.yaml" "$test_dir/pre-edit.yaml"
+MOCK_EDITOR_MODE=unchanged bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+cmp "$test_dir/pre-edit.yaml" "$test_project/values/test.yaml"
+MOCK_EDITOR_MODE=invalid expect_failure bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+cmp "$test_dir/pre-edit.yaml" "$test_project/values/test.yaml"
+MOCK_EDITOR_MODE=cancelled expect_failure bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+cmp "$test_dir/pre-edit.yaml" "$test_project/values/test.yaml"
+MOCK_EDITOR_MODE=change bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+[ "$encrypted_before" = "$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")" ]
+bash "$test_tools/secrets" decrypt test "$test_project/values/test.yaml" | yq -o=json '.' | jq -e '.secrets["app-config"].data.ORIGINAL == "edited-value" and .secrets["app-config"].data.NEW == "new-value"' >/dev/null
+echo 'ok: edit saves valid changes, retains unchanged ciphertext, and leaves originals on cancellation or invalid YAML'
+MOCK_EDIT_SOURCE="$test_project/values/test.yaml" MOCK_EDITOR_MODE=concurrent expect_failure bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+grep -q '# concurrent edit' "$test_project/values/test.yaml"
+echo 'ok: edit detects concurrent source changes'
+
+"$test_project/deploy" test --set-string "secrets.app-config.data.ORIGINAL=$(yq '.secrets["app-config"].data.ORIGINAL' "$test_project/values/test.yaml")"
+jq -e '.secrets["app-config"].data.ORIGINAL == "edited-value" and has("encryptionKey") == false and has("__k8s_tools") == false' "$MOCK_HELM_VALUES" >/dev/null
+if grep -q 'old-fixture-key' "$MOCK_HELM_LOG"; then echo 'Encryption key leaked into argv' >&2; exit 1; fi
+bash "$test_tools/preview" test > "$test_dir/preview.yaml"
+if grep -Eq 'edited-value|unchanged-value|old-fixture-key|ZWRpdGVkLXZhbHVl' "$test_dir/preview.yaml"; then echo 'Secret leaked into preview' >&2; exit 1; fi
+grep -q '<redacted>' "$test_dir/preview.yaml"
+echo 'ok: deploy decrypts overrides locally without passing a key; preview redacts secrets'
+export MOCK_MANIFEST=$("$REAL_HELM" template sample "$test_project/charts/sample" -f "$MOCK_HELM_VALUES")
+bash "$test_tools/preview" test --diff > "$test_dir/diff"
+if grep -q 'Secret change:' "$test_dir/diff"; then echo 'Unchanged secrets reported as changed' >&2; exit 1; fi
+export MOCK_MANIFEST=${MOCK_MANIFEST//ZWRpdGVkLXZhbHVl/b2xkLXZhbHVl}
+bash "$test_tools/preview" test --diff > "$test_dir/diff"
+grep -q 'key "ORIGINAL" changed' "$test_dir/diff"
+if grep -Eq 'edited-value|old-value|ZWRpdGVkLXZhbHVl|b2xkLXZhbHVl' "$test_dir/diff"; then echo 'Secret leaked into diff' >&2; exit 1; fi
+MOCK_HELM_GET_FAIL=1 expect_failure bash "$test_tools/preview" test --diff
+unset MOCK_MANIFEST
+echo 'ok: preview diff reports secret-only changes without values and propagates read failures'
+
+cp "$MOCK_HELM_LOG" "$test_dir/pre-rejected-preview-log"
+expect_failure bash "$test_tools/preview" test --output-dir "$test_dir/unredacted"
+grep -q 'bypasses secret redaction' "$test_dir/stderr"
+expect_failure bash "$test_tools/preview" test --output-dir="$test_dir/unredacted"
+expect_failure bash "$test_tools/preview" test --diff --output-dir "$test_dir/unredacted"
+expect_failure "$test_project/deploy" test --dry-run --output-dir "$test_dir/unredacted"
+expect_failure "$test_project/deploy" test --output-dir="$test_dir/unredacted" --dry-run=client
+[ ! -e "$test_dir/unredacted" ]
+cmp "$MOCK_HELM_LOG" "$test_dir/pre-rejected-preview-log"
+echo 'ok: preview and dry-run refuse unredacted file output before invoking Helm'
+
+cp "$test_project/deployments.yaml" "$test_dir/with-key-ref.yaml"
+yq -i 'del(.defaults.keyRef)' "$test_project/deployments.yaml"
+: > "$MOCK_HELM_VALUES"
+DEPLOY_ENCRYPTION_KEY=old-fixture-key "$test_project/deploy" test
+[ -s "$MOCK_HELM_VALUES" ]
+jq -e '.secrets["app-config"].data.ORIGINAL == "edited-value" and has("encryptionKey") == false and has("__k8s_tools") == false' "$MOCK_HELM_VALUES" >/dev/null
+DEPLOY_ENCRYPTION_KEY=old-fixture-key bash "$test_tools/preview" test > "$test_dir/env-preview.yaml"
+grep -q '<redacted>' "$test_dir/env-preview.yaml"
+if grep -Eq 'edited-value|old-fixture-key|ZWRpdGVkLXZhbHVl' "$test_dir/env-preview.yaml" "$MOCK_HELM_LOG"; then echo 'Environment key or plaintext leaked' >&2; exit 1; fi
+DEPLOY_ENCRYPTION_KEY='' expect_failure "$test_project/deploy" test
+grep -q 'DEPLOY_ENCRYPTION_KEY is empty' "$test_dir/stderr"
+cp "$test_dir/with-key-ref.yaml" "$test_project/deployments.yaml"
+echo 'ok: an environment-only key decrypts deploy and preview values; an explicitly empty key fails'
+
+yq -i '.secrets["app-config"].data.OPTIONAL = "chart-default" | .secrets["removed-group"].data.OPTIONAL = "chart-default" | .secrets["removed-data"].data.OPTIONAL = "chart-default"' "$test_project/charts/sample/values.yaml"
+MOCK_EDITOR_MODE=nulls bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+null_markers='.secrets as $s | ($s["app-config"].data | has("OPTIONAL")) and $s["app-config"].data.OPTIONAL == null and ($s | has("removed-group")) and $s["removed-group"] == null and ($s["removed-data"] | has("data")) and $s["removed-data"].data == null'
+yq -o=json '.' "$test_project/values/test.yaml" | jq -e "$null_markers" >/dev/null
+[ "$encrypted_before" = "$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")" ]
+cp "$test_project/values/test.yaml" "$test_dir/with-null-markers.yaml"
+bash "$test_tools/secrets" encrypt test "$test_project/values/test.yaml" --in-place
+cmp "$test_dir/with-null-markers.yaml" "$test_project/values/test.yaml"
+MOCK_EDITOR_MODE=boolean expect_failure bash "$test_tools/secrets" edit test --file "$test_project/values/test.yaml"
+cmp "$test_dir/with-null-markers.yaml" "$test_project/values/test.yaml"
+bash "$test_tools/secrets" decrypt test "$test_project/values/test.yaml" | yq -o=json '.' | jq -e "$null_markers" >/dev/null
+"$test_project/deploy" test
+jq -e "$null_markers" "$MOCK_HELM_VALUES" >/dev/null
+bash "$test_tools/preview" test > "$test_dir/null-preview.yaml"
+yq -o=json '.' "$test_dir/null-preview.yaml" | jq -es '
+  all(.[]; .metadata.name? != "removed-group") and
+  any(.[]; .kind == "Secret" and .metadata.name == "app-config" and (.data | has("OPTIONAL") | not)) and
+  any(.[]; .kind == "Secret" and .metadata.name == "removed-data" and .data == null)' >/dev/null
+DEPLOY_ENCRYPTION_KEY='' bash "$test_tools/preview" test --set-json 'secrets={"app-config":{"data":{"OPTIONAL":null}}}' > "$test_dir/null-only-preview.yaml"
+echo 'ok: null overrides survive encryption, editing, and deployment, remove chart defaults, and need no key when used alone'
+
+cp "$test_project/values/test.yaml" "$test_dir/pre-rekey.yaml"
+yq -i '.deployments.shared = .deployments.test' "$test_project/deployments.yaml"
+expect_failure bash "$test_tools/secrets" rekey test --to-key-ref file://keys/new.key
+cmp "$test_dir/pre-rekey.yaml" "$test_project/values/test.yaml"
+cp "$test_project/deployments.yaml" "$test_dir/pre-rekey-config.yaml"
+bash "$test_tools/secrets" rekey test shared --to-key-ref file://keys/new.key
+yq -o=json '.' "$test_project/values/test.yaml" | jq -e "$null_markers" >/dev/null
+bash "$test_tools/secrets" decrypt test "$test_project/values/test.yaml" | yq -o=json '.' | jq -e '.secrets["app-config"].data.ORIGINAL == "edited-value"' >/dev/null
+[ "$(yq '.deployments.shared.keyRef' "$test_project/deployments.yaml")" = file://keys/new.key ]
+recovery_dir=
+for candidate in "$test_project"/.secrets-rekey.*/ready; do if [ -f "$candidate" ]; then recovery_dir=${candidate%/ready}; fi; done
+[ -n "$recovery_dir" ]
+cp "$test_project/values/test.yaml" "$test_dir/post-rekey.yaml"
+printf '\n# concurrent change\n' >> "$test_project/values/test.yaml"
+expect_failure bash "$test_tools/secrets" recover "$recovery_dir"
+cp "$test_dir/post-rekey.yaml" "$test_project/values/test.yaml"
+# Simulate interruption after only one of the journaled files was replaced.
+cp "$test_dir/pre-rekey.yaml" "$test_project/values/test.yaml"
+bash "$test_tools/secrets" recover "$recovery_dir"
+cmp "$test_dir/pre-rekey.yaml" "$test_project/values/test.yaml"
+cmp "$test_dir/pre-rekey-config.yaml" "$test_project/deployments.yaml"
+echo 'ok: rekey protects shared files, rotates coordinated deployments, and can restore encrypted originals'

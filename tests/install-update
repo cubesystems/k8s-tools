@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -eo pipefail
+test_tools=$(cd "$(dirname "$0")/.." && pwd)
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-install-tests.XXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+# All Git access stays in disposable local repositories; never contact GitHub.
+# The URL rewrite lives in a test-scoped global config: git clone ignores the enclosing repository's config.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$test_dir/gitconfig"
+export GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
+export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+unset K8S_TOOLS_REF
+upstream="$test_dir/upstream with spaces"
+project="$test_dir/project with spaces"
+mkdir -p "$upstream/tests" "$project/k8s"
+git init -q -b master "$upstream"
+cp "$test_tools/.gitattributes" "$test_tools/common" "$test_tools/symlink-commands" "$test_tools/install" "$test_tools/update" "$test_tools/doctor" "$upstream/"
+printf 'one\n' > "$upstream/revision"
+printf 'not vendored\n' > "$upstream/tests/run"
+printf 'not vendored\n' > "$upstream/README.md"
+git -C "$upstream" add .
+git -C "$upstream" commit -qm 'Fixture upstream'
+git -C "$upstream" tag v0.9.0
+git -C "$upstream" tag 1.5.0
+printf 'two\n' > "$upstream/revision"
+printf '\n# Fixture self-update.\n' >> "$upstream/update"
+git -C "$upstream" add .
+git -C "$upstream" commit -qm 'Fixture upstream release'
+git -C "$upstream" tag v0.10.0
+printf 'three\n' > "$upstream/revision"
+git -C "$upstream" add .
+git -C "$upstream" commit -qm 'Fixture upstream unreleased'
+git init -q -b master "$project"
+# file:// keeps shallow clones of tags working, unlike a bare local path.
+git config --global "url.file://$upstream.insteadOf" git@github.com:cubesystems/k8s-tools.git
+printf 'fixture project\n' > "$project/README"
+printf 'custom deployment command\n' > "$project/k8s/deploy"
+git -C "$project" add .
+git -C "$project" commit -qm 'Fixture project'
+project_head=$(git -C "$project" rev-parse HEAD)
+
+expect_failure() {
+  if "$@" > "$test_dir/stdout" 2> "$test_dir/stderr"; then
+    echo "Expected failure: $*" >&2
+    exit 1
+  fi
+}
+assert_vendored_revision() { grep -qx "$1" "$project/k8s/k8s-tools/revision"; }
+
+expect_failure bash "$test_tools/update" "$project"
+(cd "$project" && K8S_TOOLS_REF=v0.9.0 bash < "$test_tools/install") > "$test_dir/install-output" 2>&1
+assert_vendored_revision one
+[ -L "$project/k8s/update" ]
+[ "$(readlink "$project/k8s/update")" = k8s-tools/update ]
+[ ! -e "$project/k8s/k8s-tools/tests" ]
+[ ! -e "$project/k8s/k8s-tools/README.md" ]
+[ ! -e "$project/k8s/k8s-tools/.git" ]
+[ ! -e "$project/k8s/k8s-tools/.gitattributes" ]
+grep -qx 'custom deployment command' "$project/k8s/deploy"
+grep -q 'Checking dependencies with ./k8s/doctor' "$test_dir/install-output"
+grep -q 'yq and jq: compatible' "$test_dir/install-output"
+[ "$(git -C "$project" rev-parse HEAD)" = "$project_head" ]
+expect_failure bash "$test_tools/install" "$project"
+git -C "$project" add k8s
+git -C "$project" commit -qm 'Vendored tools and command links'
+installed_head=$(git -C "$project" rev-parse HEAD)
+echo 'ok: standalone installer vendors plain files for a pinned tag and preserves customized commands'
+
+printf 'uncommitted changes\n' >> "$project/README"
+expect_failure bash "$test_tools/update" "$project"
+assert_vendored_revision one
+git -C "$project" add README
+expect_failure bash "$test_tools/update" "$project"
+printf 'fixture project\n' > "$project/README"
+git -C "$project" add README
+# Invoke the installed symlink from a subdirectory, including replacement of itself.
+(cd "$project/k8s" && K8S_TOOLS_REF= ./update) > "$test_dir/update-output" 2>&1
+assert_vendored_revision two
+grep -q 'Fixture self-update' "$project/k8s/k8s-tools/update"
+grep -q 'v0.10.0' "$test_dir/update-output"
+grep -qx 'custom deployment command' "$project/k8s/deploy"
+[ ! -e "$project/k8s/k8s-tools/tests" ]
+[ "$(git -C "$project" rev-parse HEAD)" = "$installed_head" ]
+[ -z "$(git -C "$project" status --porcelain | grep -v '^ M k8s/k8s-tools/')" ]
+git -C "$project" commit -qam 'Update vendored tools'
+echo 'ok: updater rejects dirty tracked files, offers the highest release tag, and applies it through the installed symlink'
+
+K8S_TOOLS_REF=master bash "$test_tools/update" "$project" > "$test_dir/master-output" 2>&1
+assert_vendored_revision three
+git -C "$project" commit -qam 'Track upstream master'
+before_failure=$(git -C "$project" rev-parse HEAD)
+git config --global --unset "url.file://$upstream.insteadOf"
+git config --global "url.file://$test_dir/missing-upstream.insteadOf" git@github.com:cubesystems/k8s-tools.git
+K8S_TOOLS_REF=master expect_failure bash "$test_tools/update" "$project"
+[ "$(git -C "$project" rev-parse HEAD)" = "$before_failure" ]
+[ -z "$(git -C "$project" status --porcelain)" ]
+assert_vendored_revision three
+echo 'ok: an explicit branch is honored and fetch failures leave the installed copy untouched'

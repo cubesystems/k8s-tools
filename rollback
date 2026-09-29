@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+parse_common_options "$@"
+set -- "${command_args[@]}"
+require_usage 1 'DEPLOYMENT [REVISION] [HELM_OPTIONS]' "$@"
+deployment_name=$1
+shift
+revision=0
+if [ "$#" -gt 0 ] && [[ "$1" != -* ]]; then revision=$1; shift; fi
+case "$revision" in ''|*[!0-9]*) die 'REVISION must be a nonnegative integer';; esac
+require_cluster=1
+require_release=1
+source "$tools_dir/load_deployment_config"
+print_target
+helm rollback "$release" "$revision" "${helm_connection_args[@]}" --wait --wait-for-jobs --timeout "$deployment_timeout" "$@"

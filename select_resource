@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Resolve release workloads only when the caller did not give a resource explicitly.
+if [ -z "${resource:-}" ]; then
+  require_deployment_value release "$release"
+  resources=$(release_workloads)
+  [ -n "$resources" ] || die "No workloads found in release $release; provide a resource explicitly"
+  resource_count=$(printf '%s\n' "$resources" | wc -l | tr -d ' ')
+  if [ "$resource_count" = 1 ]; then resource=$resources;
+  else
+    printf 'Several workloads are available. Specify one:\n%s\n' "$resources" >&2
+    exit 1
+  fi
+fi

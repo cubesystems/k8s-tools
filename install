@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Standalone bootstrap: fetches the current update command and lets it do the installation.
+set -eo pipefail
+repository=git@github.com:cubesystems/k8s-tools.git
+
+main() {
+  if [ "${1:-}" = --help ]; then
+    echo 'Usage: install [PROJECT_DIRECTORY]'
+    echo 'K8S_TOOLS_REF=TAG_OR_BRANCH pins the revision; K8S_TOOLS_REF= takes the latest release without asking.'
+    return
+  fi
+  [ "$#" -le 1 ] || { echo 'Usage: install [PROJECT_DIRECTORY]' >&2; return 1; }
+  command -v git >/dev/null || { echo 'Required command is missing: git' >&2; return 1; }
+  local project_root bootstrap_dir status=0
+  project_root=$(git -C "${1:-.}" rev-parse --show-toplevel)
+  bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-bootstrap.XXXXXX")
+  git clone --quiet --depth 1 "$repository" "$bootstrap_dir/checkout" || { rm -rf "$bootstrap_dir"; return 1; }
+  # Under curl | bash, stdin carries this script; the child must not consume it.
+  bash "$bootstrap_dir/checkout/update" --install "$project_root" < /dev/null || status=$?
+  rm -rf "$bootstrap_dir"
+  return "$status"
+}
+
+main "$@"

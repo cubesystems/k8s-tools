@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=./k8s-tools/deployments.schema.json
+schemaVersion: 2
+defaults:
+  release: my-application
+  chart: ./charts/my-application
+  context: REPLACE_WITH_CONTEXT
+  timeout: 5m
+deployments:
+  test:
+    namespace: my-application-test
+    values:
+      - values/common.yaml

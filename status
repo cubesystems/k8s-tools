@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+release_action=status
+source "$tools_dir/release_command"
