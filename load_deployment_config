@@ -24,6 +24,7 @@ deployment_context=${context_override:-${DEPLOY_KUBE_CONTEXT:-$(deployment_value
 deployment_create_namespace=$(deployment_value '.createNamespace')
 deployment_timeout=${DEPLOY_TIMEOUT:-$(deployment_value '.timeout')}
 deployment_timeout=${deployment_timeout:-5m}
+deployment_restart=$(printf '%s' "$effective_config" | jq -r 'if .restart == null then true else .restart end')
 deployment_image_tag_path=$(deployment_value '.imageTagPath')
 deployment_image_tag_path=${deployment_image_tag_path:-image.tag}
 deployment_resource_prefix=$(deployment_value '.resourcePrefix')

@@ -84,8 +84,35 @@ echo 'ok: current context requires an explicit opt-in, which the refusal and lis
 cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"
 yq -i '.defaults.createNamespace = true | .deployments.test.createNamespace = false' "$test_project/deployments.yaml"
 "$test_project/deploy" test
-assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--create-namespace") == null and all(.[]; startswith("image.tag=") == false and startswith("appVersion=") == false and startswith("resourcePrefix=") == false)'
-echo 'ok: chart-only deployment preserves defaults and explicit false overrides'
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--create-namespace") == null and all(.[]; startswith("image.tag=") == false and startswith("resourcePrefix=") == false) and any(.[]; test("^appVersion=restart-[0-9]+$"))'
+echo 'ok: chart-only deployment restarts by default and honors explicit createNamespace false'
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test v2 > "$test_dir/default-restart-preview.yaml"
+yq -o=json '.' "$test_dir/default-restart-preview.yaml" | jq -es 'any(.[]; .kind == "ConfigMap" and (.data.appVersion | test("^v2-[0-9]+$")))' >/dev/null
+yq -i '.defaults.restart = false' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | all(.[]; startswith("appVersion=") == false)'
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test > "$test_dir/no-restart-preview.yaml"
+yq -o=json '.' "$test_dir/no-restart-preview.yaml" | jq -es 'any(.[]; .kind == "ConfigMap" and .data.appVersion == "stable")' >/dev/null
+yq -i '.defaults.restart = true' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | any(.[]; test("^appVersion=restart-[0-9]+$")) and index("--restart") == null'
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test v2 > "$test_dir/restart-preview.yaml"
+yq -o=json '.' "$test_dir/restart-preview.yaml" | jq -es 'any(.[]; .kind == "ConfigMap" and (.data.appVersion | test("^v2-[0-9]+$")))' >/dev/null
+"$test_project/deploy" test --no-restart --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | all(.[]; startswith("appVersion=") == false) and index("--no-restart") == null'
+yq -i '.deployments.test.restart = false' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | all(.[]; startswith("appVersion=") == false)'
+"$test_project/deploy" test v3 --restart --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | any(.[]; test("^appVersion=v3-[0-9]+$"))'
+yq -i '.defaults.restart = false | .deployments.test.restart = true' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | any(.[]; test("^appVersion=restart-[0-9]+$"))'
+yq -i '.deployments.test.restart = "true"' "$test_project/deployments.yaml"
+expect_failure bash "$test_tools/config" --config "$test_project/deployments.yaml" validate
+grep -q 'deployments.test.restart: expected a boolean' "$test_dir/stderr"
+yq -i 'del(.defaults.restart, .deployments.test.restart)' "$test_project/deployments.yaml"
+echo 'ok: restart configuration applies to deploy and preview, honors deployment and CLI overrides, and requires a boolean'
 yq -i '.defaults.namespce = "typo"' "$test_project/deployments.yaml"
 expect_failure "$test_project/kubectl" test get pods
 cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"

@@ -8,7 +8,7 @@ extra_args=()
 override_args=()
 wait_enabled=true
 timeout_override=
-restart_requested=false
+restart_requested=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --image-tag|--timeout|--namespace|-n|--kube-context|--kubeconfig|--repo|--version)
@@ -32,6 +32,7 @@ while [ "$#" -gt 0 ]; do
     --no-wait|--wait=false) wait_enabled=false; shift;;
     --wait|--wait=true) wait_enabled=true; shift;;
     --restart) restart_requested=true; shift;;
+    --no-restart) restart_requested=false; shift;;
     --dry-run|--dry-run=client) preview_mode=true; shift;;
     --dry-run=*) die 'Use preview for a local render; server dry-run is not supported by this wrapper';;
     --output-dir|--output-dir=*) die '--output-dir bypasses secret redaction; redirect preview output to a file instead';;
@@ -49,6 +50,7 @@ done
 require_chart=1
 if [ "${preview_mode:-false}" != true ]; then require_cluster=1; fi
 source "$tools_dir/load_deployment_config"
+restart_requested=${restart_requested:-$deployment_restart}
 need_command helm
 require_deployment_value namespace "$deployment_namespace"
 load_values_files

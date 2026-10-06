@@ -4,12 +4,12 @@ def settings($where):
   . as $settings |
   ["release", "namespace", "chart", "repo", "version", "kubeconfig", "context",
    "keyRef", "values", "createNamespace", "useCurrentContext", "timeout",
-   "imageTagPath", "resourcePrefix"] as $allowed |
+   "imageTagPath", "resourcePrefix", "restart"] as $allowed |
   if (keys - $allowed | length) > 0 then fail($where; "unknown fields: " + ((keys - $allowed) | join(", "))) else . end |
   to_entries | all(.[];
     .key as $key | .value as $value |
     if $value == null then true
-    elif (["createNamespace", "useCurrentContext"] | index($key)) != null then
+    elif (["createNamespace", "useCurrentContext", "restart"] | index($key)) != null then
       if ($value | type) == "boolean" then true else fail($where + "." + $key; "expected a boolean") end
     elif $key == "values" then
       if ($value | type) != "array" then fail($where + ".values"; "expected a list of filenames")

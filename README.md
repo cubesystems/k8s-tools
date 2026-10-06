@@ -77,6 +77,7 @@ Every setting may be shared under defaults or set on a deployment:
 | keyRef | Encryption key reference; optional when DEPLOY_ENCRYPTION_KEY supplies the key |
 | createNamespace | Create a missing namespace during install; defaults to false |
 | timeout | Rollout tracking deadline and Helm timeout; defaults to 5m |
+| restart | Set a timestamped appVersion on every deploy or preview for charts that use it to roll pods; defaults to true |
 | imageTagPath | Mapping path set by an image tag argument; defaults to image.tag |
 | resourcePrefix | Optional value passed to the chart; no implicit suffix |
 
@@ -107,8 +108,10 @@ selected identity can get pods.
 ./k8s-tools/preview production --image-tag v1.2.0 --diff
 ~~~
 
-- The image tag is optional and sets only imageTagPath. `--restart` sets a timestamped
-  appVersion for charts that use it to roll pods.
+- The image tag is optional and sets imageTagPath. Deploy and preview set a timestamped
+  appVersion by default for charts that use it to roll pods. Set `restart: false` under
+  `defaults` or a deployment to disable this; `--no-restart` disables it for one run,
+  and `--restart` enables it regardless of configuration.
 - After Helm returns, deploy follows each workload's rollout and waits for Jobs until
   the timeout, and fails if one fails. `--no-wait` returns right after Helm.
 - Other Helm arguments are forwarded as given, quoting included.

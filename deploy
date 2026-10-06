@@ -2,7 +2,7 @@
 source "$(dirname "$(realpath "$0")")/common"
 parse_common_options "$@"
 set -- "${command_args[@]}"
-usage_help='Options: --no-wait --timeout 5m --restart'
+usage_help='Options: --no-wait --timeout 5m --restart --no-restart'
 require_usage 1 'DEPLOYMENT [IMAGE_TAG | --image-tag TAG] [HELM_OPTIONS]' "$@"
 source "$tools_dir/prepare_deployment"
 if [ "${preview_mode:-false}" = true ]; then

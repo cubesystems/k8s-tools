@@ -3,6 +3,12 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.1.0
+
+- Deploy and preview now set timestamped appVersion values by default, like `--restart`.
+  Set `restart: false` in defaults or a deployment to disable this behavior, or use
+  `--no-restart` for one run. `--restart` overrides the configured setting.
+
 ## 2.0.0
 
 A rewrite with the same commands and Git layout. New: config validation, secrets
