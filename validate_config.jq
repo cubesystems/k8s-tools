@@ -4,16 +4,16 @@ def settings($where):
   . as $settings |
   ["release", "namespace", "chart", "repo", "version", "kubeconfig", "context",
    "keyRef", "values", "createNamespace", "useCurrentContext", "timeout",
-   "imageTagPath", "resourcePrefix", "restart", "helmArgs"] as $allowed |
+   "imageTagPath", "resourcePrefix", "restart", "helmArgs", "beforeDeploy"] as $allowed |
   if (keys - $allowed | length) > 0 then fail($where; "unknown fields: " + ((keys - $allowed) | join(", "))) else . end |
   to_entries | all(.[];
     .key as $key | .value as $value |
     if $value == null then true
     elif (["createNamespace", "useCurrentContext", "restart"] | index($key)) != null then
       if ($value | type) == "boolean" then true else fail($where + "." + $key; "expected a boolean") end
-    elif $key == "helmArgs" then
-      if ($value | type) != "array" then fail($where + ".helmArgs"; "expected a list of arguments")
-      else $value | all(.[]; if type == "string" and length > 0 and (test("[\u0000\r\n]") | not) then true else fail($where + ".helmArgs"; "expected nonempty arguments without NUL or newlines") end) end
+    elif $key == "helmArgs" or $key == "beforeDeploy" then
+      if ($value | type) != "array" then fail($where + "." + $key; "expected a list of arguments")
+      else $value | all(.[]; if type == "string" and length > 0 and (test("[\u0000\r\n]") | not) then true else fail($where + "." + $key; "expected nonempty arguments without NUL or newlines") end) end
     elif $key == "values" then
       if ($value | type) != "array" then fail($where + ".values"; "expected a list of filenames")
       else $value | all(.[]; if type == "string" and length > 0 and (test("[\r\n]") | not) then true else fail($where + ".values"; "expected nonempty filenames without newlines") end) end

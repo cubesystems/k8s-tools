@@ -39,6 +39,7 @@
         "restart": {"type": ["boolean", "null"], "default": true},
         "useCurrentContext": {"type": ["boolean", "null"]},
         "helmArgs": {"type": ["array", "null"], "items": {"type": "string", "minLength": 1, "pattern": "^[^\u0000\r\n]+$"}},
+        "beforeDeploy": {"type": ["array", "null"], "items": {"type": "string", "minLength": 1, "pattern": "^[^\u0000\r\n]+$"}},
         "values": {"type": ["array", "null"], "items": {"type": "string", "minLength": 1, "pattern": "^[^\r\n]+$"}}
       }
     }

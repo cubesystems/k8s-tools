@@ -149,6 +149,58 @@ done
 cp "$test_dir/pre-helm-args.yaml" "$test_project/deployments.yaml"
 echo 'ok: helmArgs preserves arguments, supports inheritance and CLI overrides, and enforces validation and guards'
 
+# A build hook uses fixed tags, preserves argv, and finishes before Helm starts.
+cp "$test_project/deployments.yaml" "$test_dir/pre-hook.yaml"
+export MOCK_BUILD_LOG="$test_dir/build.jsonl"
+cat > "$test_project/build local.sh" <<'HOOK'
+#!/usr/bin/env bash
+set -eo pipefail
+jq -cn --arg cwd "$PWD" --arg tag "$IMAGE_TAG" --slurpfile helm "$MOCK_HELM_LOG" --args \
+  '{cwd:$cwd,tag:$tag,args:$ARGS.positional,upgradesBefore:([$helm[] | select(.[0] == "upgrade")] | length)}' -- "$@" >> "$MOCK_BUILD_LOG"
+echo 'Built local images'
+exit "${MOCK_BUILD_EXIT:-0}"
+HOOK
+chmod +x "$test_project/build local.sh"
+yq -i '.defaults.beforeDeploy = ["env", "IMAGE_TAG=dev", "./build local.sh", "hello world $(literal)"]' "$test_project/deployments.yaml"
+upgrades_before_hook=$(jq -s '[.[] | select(.[0] == "upgrade")] | length' "$MOCK_HELM_LOG")
+(cd "$test_dir" && "$test_project/deploy" test --no-wait) > "$test_dir/hook-output"
+jq -es --arg cwd "$(cd "$test_project" && pwd -P)" --argjson upgrades "$upgrades_before_hook" \
+  'length == 1 and .[0].cwd == $cwd and .[0].tag == "dev" and .[0].args == ["hello world $(literal)"] and .[0].upgradesBefore == $upgrades' "$MOCK_BUILD_LOG" >/dev/null
+assert_log "$MOCK_HELM_LOG" "[.[] | select(.[0] == \"upgrade\")] | length == $((upgrades_before_hook + 1))"
+grep -q 'Built local images' "$test_dir/hook-output"
+"$test_project/deploy" test >/dev/null
+assert_log "$MOCK_BUILD_LOG" 'length == 2'
+cp "$MOCK_BUILD_LOG" "$test_dir/pre-preview-build-log"
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test >/dev/null
+MOCK_MANIFEST=$'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sample' bash "$test_tools/preview" --config "$test_project/deployments.yaml" test --diff >/dev/null
+"$test_project/deploy" test --dry-run >/dev/null
+"$test_project/deploy" test --dry-run=client >/dev/null
+bash "$test_tools/config" --config "$test_project/deployments.yaml" validate >/dev/null
+cmp "$MOCK_BUILD_LOG" "$test_dir/pre-preview-build-log"
+cp "$MOCK_HELM_LOG" "$test_dir/pre-build-failure-helm-log"
+MOCK_BUILD_EXIT=57 expect_failure "$test_project/deploy" test
+[ "$last_test_status" = 57 ]
+cmp "$MOCK_HELM_LOG" "$test_dir/pre-build-failure-helm-log"
+yq -i '.deployments.test.beforeDeploy = ["env", "IMAGE_TAG=other", "./build local.sh", "deployment override"]' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait >/dev/null
+assert_log "$MOCK_BUILD_LOG" 'length == 4 and .[-1].tag == "other" and .[-1].args == ["deployment override"]'
+cp "$MOCK_BUILD_LOG" "$test_dir/pre-disabled-build-log"
+for clear_hook in '[]' null; do
+  yq -i ".deployments.test.beforeDeploy = $clear_hook" "$test_project/deployments.yaml"
+  "$test_project/deploy" test --no-wait >/dev/null
+  cmp "$MOCK_BUILD_LOG" "$test_dir/pre-disabled-build-log"
+done
+for invalid_hook in '"./build local.sh"' '[false]' '[""]' '["line\nbreak"]' '["nul\u0000byte"]'; do
+  yq -o=json '.' "$test_project/deployments.yaml" | jq --argjson args "$invalid_hook" \
+    '.deployments.test.beforeDeploy = $args' | yq -P -p=json '.' > "$test_dir/invalid-hook.yaml"
+  cp "$test_dir/invalid-hook.yaml" "$test_project/deployments.yaml"
+  expect_failure bash "$test_tools/config" --config "$test_project/deployments.yaml" validate
+  grep -q 'deployments.test.beforeDeploy:' "$test_dir/stderr"
+done
+cp "$test_dir/pre-hook.yaml" "$test_project/deployments.yaml"
+unset MOCK_BUILD_LOG
+echo 'ok: beforeDeploy preserves cwd and argv, runs once before Helm, stops failed builds, supports overrides, and skips preview'
+
 yq -i '.defaults.namespce = "typo"' "$test_project/deployments.yaml"
 expect_failure "$test_project/kubectl" test get pods
 cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"

@@ -72,6 +72,7 @@ Every setting may be shared under defaults or set on a deployment:
 | version | Optional chart version; pin remote charts for reproducible deployments |
 | values | Ordered list of values files; optional |
 | helmArgs | List of default arguments for deploy and preview; explicit CLI arguments take precedence |
+| beforeDeploy | Command and arguments to run locally before Helm deploy; skipped by preview and dry-run |
 | context | Named kubeconfig context |
 | kubeconfig | Optional kubeconfig file |
 | useCurrentContext | Explicit permission to use the current context when no connection is configured |
@@ -82,8 +83,8 @@ Every setting may be shared under defaults or set on a deployment:
 | imageTagPath | Mapping path set by an image tag argument; defaults to image.tag |
 | resourcePrefix | Optional value passed to the chart; no implicit suffix |
 
-A deployment's `values` or `helmArgs` list replaces the corresponding default list;
-`helmArgs: []` or `helmArgs: null` clears inherited arguments. Relative paths resolve against
+A deployment's `values`, `helmArgs` or `beforeDeploy` list replaces the corresponding
+default list; `[]` or `null` clears inherited arguments or hooks. Relative paths resolve against
 deployments.yaml; files without `schemaVersion` keep the 1.x layout with top-level
 settings and paths relative to the values directory. Unknown fields fail by name.
 
@@ -137,6 +138,26 @@ selected identity can get pods.
 Preview renders locally with the same values as deploy, with secrets redacted.
 `--diff` compares against the installed release and reports secret changes by name.
 Deploy's `--dry-run` runs the same preview.
+
+### Before-deploy hook
+
+`beforeDeploy` runs a local command after configuration validation and before Helm:
+
+~~~yaml
+deployments:
+  staging:
+    beforeDeploy: [../scripts/prepare-deployment.sh, staging]
+~~~
+
+The list contains the executable followed by its arguments. It runs once per deploy
+from the directory containing `deployments.yaml`, inherits the environment, and
+passes arguments literally without shell expansion. A nonzero exit stops deployment
+with the same exit code. Each argument must be nonempty and contain no NUL bytes or
+newlines.
+
+The hook also runs with `--no-wait`. Preview, dry-run and read-only commands skip it.
+Its output is displayed normally; it does not change Helm values or the parent
+process's environment.
 
 ## Daily operations
 

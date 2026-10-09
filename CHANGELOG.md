@@ -3,6 +3,12 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.4.0
+
+- Add `beforeDeploy`, a local command and argument list run before Helm deployment.
+  Hooks run relative to deployments.yaml, support defaults and deployment overrides,
+  stop deployment on failure, and are skipped by preview and dry-run.
+
 ## 2.3.0
 
 - Update prints a suggested commit command using the selected tag or branch.

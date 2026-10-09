@@ -9,9 +9,17 @@ if [ "${preview_mode:-false}" = true ]; then
   source "$tools_dir/render_preview"
   exit 0
 fi
+print_target
+before_deploy=()
+while IFS= read -r hook_arg; do
+  [ -n "$hook_arg" ] && before_deploy+=("$hook_arg")
+done < <(printf '%s' "$effective_config" | jq -r '.beforeDeploy // [] | .[]')
+if [ "${#before_deploy[@]}" -gt 0 ]; then
+  echo 'Running beforeDeploy...' >&2
+  (cd "$runtime_dir" && "${before_deploy[@]}")
+fi
 source "$tools_dir/secret_functions"
 prepare_secret_overlay
-print_target
 # Helm's stderr is shown as it comes and kept, so known failures can get a hint below.
 temporary_file helm_errors
 deploy_status=0
