@@ -75,7 +75,7 @@ installed_version() {
 
 # Load all functions before replacing files: the update replaces this script itself.
 main() {
-  local mode=update dependency deployment_dir previous_version
+  local mode=update dependency deployment_dir previous_version quoted_ref
   if [ "${1:-}" = --install ]; then mode=install; shift; fi
   if [ "${1:-}" = --help ]; then
     echo "Usage: $mode [DIRECTORY]"
@@ -123,6 +123,8 @@ main() {
   else
     echo "Updated k8s-tools from $previous_version to $k8s_tools_ref (version $(installed_version))."
     echo "Review with git diff -- $prefix and https://github.com/cubesystems/k8s-tools/blob/master/CHANGELOG.md, then commit with any new command symlinks."
+    quoted_ref=${k8s_tools_ref//\'/\'\\\'\'}
+    printf "Suggested commit (after staging the changes):\n  git commit -m 'Update k8s-tools to %s'\n" "$quoted_ref"
   fi
 }
 

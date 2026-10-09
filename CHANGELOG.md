@@ -3,6 +3,10 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.3.0
+
+- Update prints a suggested commit command using the selected tag or branch.
+
 ## 2.2.0
 
 - Add `helmArgs` to defaults and deployments for recurring deploy and preview options.
