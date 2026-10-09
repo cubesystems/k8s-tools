@@ -113,6 +113,42 @@ expect_failure bash "$test_tools/config" --config "$test_project/deployments.yam
 grep -q 'deployments.test.restart: expected a boolean' "$test_dir/stderr"
 yq -i 'del(.defaults.restart, .deployments.test.restart)' "$test_project/deployments.yaml"
 echo 'ok: restart configuration applies to deploy and preview, honors deployment and CLI overrides, and requires a boolean'
+# Configured Helm arguments share CLI parsing; no cluster is contacted.
+cp "$test_project/deployments.yaml" "$test_dir/pre-helm-args.yaml"
+yq -i '.defaults.helmArgs = ["--skip-crds", "--set-string", "resourcePrefix=hello world $(literal)", "--image-tag", "configured", "--timeout", "2m"]' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--skip-crds") != null and index("resourcePrefix=hello world $(literal)") != null and index("image.tag=\"configured\"") != null and index("2m") != null'
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test > "$test_dir/helm-args-preview.yaml"
+yq -o=json '.' "$test_dir/helm-args-preview.yaml" | jq -es 'any(.[]; .kind == "ConfigMap" and .data.prefix == "hello world $(literal)" and .data.imageTag == "configured")' >/dev/null
+"$test_project/deploy" test cli-tag --skip-crds=false --timeout 3m --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--skip-crds") < index("--skip-crds=false") and index("image.tag=\"cli-tag\"") != null and index("3m") != null and index("2m") == null'
+bash "$test_tools/preview" --config "$test_project/deployments.yaml" test --image-tag cli-tag --set-string 'resourcePrefix=CLI value' > "$test_dir/helm-args-cli-preview.yaml"
+yq -o=json '.' "$test_dir/helm-args-cli-preview.yaml" | jq -es 'any(.[]; .kind == "ConfigMap" and .data.prefix == "CLI value" and .data.imageTag == "cli-tag")' >/dev/null
+yq -i '.deployments.test.helmArgs = ["--set-string", "resourcePrefix=deployment"]' "$test_project/deployments.yaml"
+"$test_project/deploy" test --no-wait
+assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--skip-crds") == null and index("resourcePrefix=deployment") != null and index("resourcePrefix=hello world $(literal)") == null'
+for clear_args in '[]' null; do
+  yq -i ".deployments.test.helmArgs = $clear_args" "$test_project/deployments.yaml"
+  "$test_project/deploy" test --no-wait
+  assert_log "$MOCK_HELM_LOG" "$last_upgrade"' | index("--skip-crds") == null and index("resourcePrefix=hello world $(literal)") == null'
+done
+for invalid_args in '"--skip-crds"' '[true]' '[""]' '["line\nbreak"]' '["nul\u0000byte"]'; do
+  yq -o=json '.' "$test_project/deployments.yaml" | jq --argjson args "$invalid_args" \
+    '.deployments.test.helmArgs = $args' | yq -P -p=json '.' > "$test_dir/invalid-helm-args.yaml"
+  cp "$test_dir/invalid-helm-args.yaml" "$test_project/deployments.yaml"
+  expect_failure bash "$test_tools/config" --config "$test_project/deployments.yaml" validate
+  grep -q 'deployments.test.helmArgs:' "$test_dir/stderr"
+done
+for guarded_arg in --reuse-values --reset-then-reuse-values=true --output-dir=/tmp/unused --dry-run=server --set-string; do
+  yq -i ".deployments.test.helmArgs = [\"$guarded_arg\"]" "$test_project/deployments.yaml"
+  cp "$MOCK_HELM_LOG" "$test_dir/pre-guard-helm-log"
+  expect_failure "$test_project/deploy" test
+  expect_failure bash "$test_tools/preview" --config "$test_project/deployments.yaml" test
+  cmp "$MOCK_HELM_LOG" "$test_dir/pre-guard-helm-log"
+done
+cp "$test_dir/pre-helm-args.yaml" "$test_project/deployments.yaml"
+echo 'ok: helmArgs preserves arguments, supports inheritance and CLI overrides, and enforces validation and guards'
+
 yq -i '.defaults.namespce = "typo"' "$test_project/deployments.yaml"
 expect_failure "$test_project/kubectl" test get pods
 cp "$test_dir/legacy.yaml" "$test_project/deployments.yaml"

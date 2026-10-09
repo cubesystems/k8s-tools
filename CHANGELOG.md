@@ -3,6 +3,13 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.2.0
+
+- Add `helmArgs` to defaults and deployments for recurring deploy and preview options.
+  Deployment lists replace defaults; an empty list or null clears inherited arguments.
+  CLI scalar options take precedence; repeatable options accumulate using Helm's rules.
+  Configured arguments pass through the same validation as CLI arguments.
+
 ## 2.1.0
 
 - Deploy and preview now set timestamped appVersion values by default, like `--restart`.

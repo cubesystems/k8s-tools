@@ -71,6 +71,7 @@ Every setting may be shared under defaults or set on a deployment:
 | repo | Optional HTTP chart repository URL |
 | version | Optional chart version; pin remote charts for reproducible deployments |
 | values | Ordered list of values files; optional |
+| helmArgs | List of default arguments for deploy and preview; explicit CLI arguments take precedence |
 | context | Named kubeconfig context |
 | kubeconfig | Optional kubeconfig file |
 | useCurrentContext | Explicit permission to use the current context when no connection is configured |
@@ -81,7 +82,8 @@ Every setting may be shared under defaults or set on a deployment:
 | imageTagPath | Mapping path set by an image tag argument; defaults to image.tag |
 | resourcePrefix | Optional value passed to the chart; no implicit suffix |
 
-A deployment's values list replaces the default list. Relative paths resolve against
+A deployment's `values` or `helmArgs` list replaces the corresponding default list;
+`helmArgs: []` or `helmArgs: null` clears inherited arguments. Relative paths resolve against
 deployments.yaml; files without `schemaVersion` keep the 1.x layout with top-level
 settings and paths relative to the values directory. Unknown fields fail by name.
 
@@ -114,7 +116,21 @@ selected identity can get pods.
   and `--restart` enables it regardless of configuration.
 - After Helm returns, deploy follows each workload's rollout and waits for Jobs until
   the timeout, and fails if one fails. `--no-wait` returns right after Helm.
-- Other Helm arguments are forwarded as given, quoting included.
+- Other Helm arguments are forwarded as given, quoting included. Configure recurring
+  arguments with `helmArgs` under `defaults` or a deployment, for example:
+
+  ~~~yaml
+  helmArgs:
+    - --skip-crds
+    - --set-string
+    - "configuration.message=hello world"
+  ~~~
+
+  Each item is one nonempty argument without NUL bytes or newlines; spaces and shell characters
+  stay literal. Configured arguments use the same parsing and restrictions as CLI
+  arguments and are processed first. Explicit CLI options override configured scalar
+  options; repeatable options accumulate using Helm's normal rules. Use flags accepted
+  by both `helm upgrade` and `helm template` when the deployment needs preview support.
 - The target context, namespace, release and chart are printed first. Context is
   passed per command and never changes your current kubeconfig context.
 
