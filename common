@@ -5,7 +5,7 @@ tools_dir=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 runtime_dir=$(realpath "$(dirname "$0")")
 # Unlinked commands run from inside k8s-tools; the deployment directory is its parent.
 if [ "$runtime_dir" = "$tools_dir" ]; then runtime_dir=$(dirname "$tools_dir"); fi
-tools_version=2.4.0
+tools_version=2.5.0
 temporary_files=()
 temporary_dirs=()
 # All commands run as k8s-tools/NAME; only default_links get a link beside the tools directory.
