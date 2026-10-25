@@ -72,7 +72,7 @@ Every setting may be shared under defaults or set on a deployment:
 | version | Optional chart version; pin remote charts for reproducible deployments |
 | values | Ordered list of values files; optional |
 | helmArgs | List of default arguments for deploy and preview; explicit CLI arguments take precedence |
-| beforeDeploy | Command and arguments to run locally before Helm deploy; skipped by preview and dry-run |
+| beforeDeploy | Command and arguments to run locally before Helm deploy, with the requested image tag in `IMAGE_TAG`; skipped by preview and dry-run |
 | context | Named kubeconfig context |
 | kubeconfig | Optional kubeconfig file |
 | useCurrentContext | Explicit permission to use the current context when no connection is configured |
@@ -151,8 +151,9 @@ deployments:
 
 The list contains the executable followed by its arguments. It runs once per deploy
 from the directory containing `deployments.yaml`, inherits the environment, and
-passes arguments literally without shell expansion. A nonzero exit stops deployment
-with the same exit code. Each argument must be nonempty and contain no NUL bytes or
+passes arguments literally without shell expansion. `IMAGE_TAG` holds the tag given
+to deploy, or is empty when none was given. A nonzero exit stops deployment with the
+same exit code. Each argument must be nonempty and contain no NUL bytes or
 newlines.
 
 The hook also runs with `--no-wait`. Preview, dry-run and read-only commands skip it.

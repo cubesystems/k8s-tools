@@ -184,6 +184,10 @@ cmp "$MOCK_HELM_LOG" "$test_dir/pre-build-failure-helm-log"
 yq -i '.deployments.test.beforeDeploy = ["env", "IMAGE_TAG=other", "./build local.sh", "deployment override"]' "$test_project/deployments.yaml"
 "$test_project/deploy" test --no-wait >/dev/null
 assert_log "$MOCK_BUILD_LOG" 'length == 4 and .[-1].tag == "other" and .[-1].args == ["deployment override"]'
+yq -i '.deployments.test.beforeDeploy = ["./build local.sh"]' "$test_project/deployments.yaml"
+"$test_project/deploy" test v1.2.3 --no-wait >/dev/null
+"$test_project/deploy" test --no-wait >/dev/null
+assert_log "$MOCK_BUILD_LOG" 'length == 6 and .[-2].tag == "v1.2.3" and .[-1].tag == ""'
 cp "$MOCK_BUILD_LOG" "$test_dir/pre-disabled-build-log"
 for clear_hook in '[]' null; do
   yq -i ".deployments.test.beforeDeploy = $clear_hook" "$test_project/deployments.yaml"
@@ -199,7 +203,7 @@ for invalid_hook in '"./build local.sh"' '[false]' '[""]' '["line\nbreak"]' '["n
 done
 cp "$test_dir/pre-hook.yaml" "$test_project/deployments.yaml"
 unset MOCK_BUILD_LOG
-echo 'ok: beforeDeploy preserves cwd and argv, runs once before Helm, stops failed builds, supports overrides, and skips preview'
+echo 'ok: beforeDeploy preserves cwd and argv and IMAGE_TAG, runs once before Helm, stops failed builds, supports overrides, and skips preview'
 
 yq -i '.defaults.namespce = "typo"' "$test_project/deployments.yaml"
 expect_failure "$test_project/kubectl" test get pods

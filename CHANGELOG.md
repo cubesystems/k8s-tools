@@ -3,6 +3,11 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## Unreleased
+
+- `beforeDeploy` hooks receive the requested image tag as `IMAGE_TAG`, empty when
+  deploy was run without one, so one hook can build what the deploy will run.
+
 ## 2.4.0
 
 - Add `beforeDeploy`, a local command and argument list run before Helm deployment.
