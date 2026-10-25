@@ -16,7 +16,7 @@ while IFS= read -r hook_arg; do
 done < <(printf '%s' "$effective_config" | jq -r '.beforeDeploy // [] | .[]')
 if [ "${#before_deploy[@]}" -gt 0 ]; then
   echo 'Running beforeDeploy...' >&2
-  (cd "$runtime_dir" && "${before_deploy[@]}")
+  (cd "$runtime_dir" && IMAGE_TAG="$image_tag" "${before_deploy[@]}")
 fi
 source "$tools_dir/secret_functions"
 prepare_secret_overlay
