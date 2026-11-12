@@ -12,8 +12,8 @@ load_configuration
 configured_args=()
 while IFS= read -r helm_arg; do
   [ -n "$helm_arg" ] && configured_args+=("$helm_arg")
-done < <(printf '%s' "$config" | jq -r --arg name "$deployment_name" \
-  '((.defaults // {}) + (.deployments[$name] // {})).helmArgs // [] | .[]')
+done < <(printf '%s' "$config" | jq -L "$tools_dir" -r --arg name "$deployment_name" \
+  'include "effective_config"; effective($name).helmArgs // [] | .[]')
 set -- "${configured_args[@]}" "$@"
 extra_args=()
 override_args=()

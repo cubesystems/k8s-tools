@@ -3,7 +3,7 @@ def settings($where):
   if type != "object" then fail($where; "expected a mapping") else . end |
   . as $settings |
   ["release", "namespace", "chart", "repo", "version", "kubeconfig", "context",
-   "keyRef", "values", "createNamespace", "useCurrentContext", "timeout",
+   "keyRef", "values", "createNamespace", "useCurrentContext", "timeout", "template",
    "imageTagPath", "resourcePrefix", "restart", "helmArgs", "beforeDeploy"] as $allowed |
   if (keys - $allowed | length) > 0 then fail($where; "unknown fields: " + ((keys - $allowed) | join(", "))) else . end |
   to_entries | all(.[];
@@ -23,8 +23,8 @@ def settings($where):
 if type != "object" then fail("deployments.yaml"; "expected a mapping") else . end |
 if has("environments") then error("Rename environments to deployments for k8s-tools 2.x") else . end |
 . as $root |
-if (keys - ["$schema", "schemaVersion", "defaults", "deployments", "release", "chart", "repo", "version"] | length) > 0
-then error("Unknown top-level configuration fields: " + ((keys - ["$schema", "schemaVersion", "defaults", "deployments", "release", "chart", "repo", "version"]) | join(", "))) else . end |
+if (keys - ["$schema", "schemaVersion", "defaults", "templates", "deployments", "release", "chart", "repo", "version"] | length) > 0
+then error("Unknown top-level configuration fields: " + ((keys - ["$schema", "schemaVersion", "defaults", "templates", "deployments", "release", "chart", "repo", "version"]) | join(", "))) else . end |
 if has("schemaVersion") and .schemaVersion != 2 then error("schemaVersion must be 2, or omitted for legacy paths") else . end |
 if has("$schema") and (."$schema" | type) != "string" then error("$schema must be a string") else . end |
 if has("defaults") and (.defaults | type) != "object" then error("defaults must be a mapping") else . end |
@@ -32,6 +32,11 @@ if .schemaVersion == 2 and any(["release", "chart", "repo", "version"][]; . as $
 then error("schemaVersion 2: move release, chart, repo and version into defaults") else . end |
 if (.deployments | type) != "object" or (.deployments | length) == 0 then error("deployments must be a nonempty mapping") else . end |
 if any(.deployments | keys[]; length == 0 or test("[\\r\\n\\t]")) then error("deployment names must be nonempty and contain no tabs or newlines") else . end |
-(.defaults // {} | settings("defaults")) and
+if has("templates") and (.templates | type) != "object" then error("templates must be a mapping") else . end |
+((.defaults // {}) | settings("defaults") and (if has("template") then fail("defaults"; "defaults cannot name a template") else true end)) and
+(.templates // {} | to_entries | all(.[]; .key as $name | .value | settings("templates." + $name) and
+  (if has("template") then fail("templates." + $name; "a template cannot name a template") else true end))) and
 ({release, chart, repo, version} | settings("top-level defaults")) and
-(.deployments | to_entries | all(.[]; .key as $name | .value | settings("deployments." + $name)))
+(.deployments | to_entries | all(.[]; .key as $name | .value | settings("deployments." + $name) and
+  (. as $deployment | if $deployment.template != null and (($root.templates // {}) | has($deployment.template) | not)
+   then fail("deployments." + $name + ".template"; "unknown template " + $deployment.template) else true end)))

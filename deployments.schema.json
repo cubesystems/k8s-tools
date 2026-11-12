@@ -8,6 +8,7 @@
     "$schema": {"type": "string"},
     "schemaVersion": {"const": 2},
     "defaults": {"$ref": "#/$defs/settings"},
+    "templates": {"type": "object", "additionalProperties": {"$ref": "#/$defs/settings"}},
     "deployments": {"type": "object", "minProperties": 1, "propertyNames": {"minLength": 1, "pattern": "^[^\r\n\t]+$"}, "additionalProperties": {"$ref": "#/$defs/settings"}},
     "release": {"$ref": "#/$defs/text"},
     "chart": {"$ref": "#/$defs/text"},
@@ -24,6 +25,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "template": {"$ref": "#/$defs/text"},
         "release": {"$ref": "#/$defs/text"},
         "namespace": {"$ref": "#/$defs/text"},
         "chart": {"$ref": "#/$defs/text"},

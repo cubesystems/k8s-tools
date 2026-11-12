@@ -7,10 +7,9 @@ load_configuration
 case "${1:-}" in
   --names) printf '%s' "$config" | jq -r '.deployments | keys[]';;
   ''|--json)
-    deployments=$(printf '%s' "$config" | jq '
-      . as $root | .deployments | to_entries | map(
-      {name:.key} + ({release:$root.release,chart:$root.chart,version:$root.version} |
-      with_entries(select(.value != null))) + ($root.defaults // {}) + .value)')
+    deployments=$(printf '%s' "$config" | jq -L "$tools_dir" '
+      include "effective_config";
+      . as $root | [.deployments | keys[] as $name | {name:$name} + ($root | effective($name))]')
     if [ "${1:-}" = --json ]; then printf '%s\n' "$deployments";
     else
       table=$(

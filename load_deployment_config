@@ -9,9 +9,8 @@ if ! printf '%s' "$config" | jq -e --arg name "$deployment_name" '.deployments |
   exit 1
 fi
 
-effective_config=$(printf '%s' "$config" | jq -c --arg name "$deployment_name" '
-  ({release, repo, chart, version} | with_entries(select(.value != null))) +
-  (.defaults // {}) + .deployments[$name]')
+effective_config=$(printf '%s' "$config" | jq -L "$tools_dir" -c --arg name "$deployment_name" '
+  include "effective_config"; effective($name)')
 deployment_value() { printf '%s' "$effective_config" | jq -r "$1 // empty"; }
 release=${DEPLOY_RELEASE:-$(deployment_value '.release')}
 deployment_namespace=${namespace_override:-$(deployment_value '.namespace')}
