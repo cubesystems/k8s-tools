@@ -1,5 +1,6 @@
 # Preserve this document comment.
 resourcePrefix: configured
+
 secrets:
   app-config:
     type: Opaque
@@ -7,3 +8,5 @@ secrets:
       # Preserve this secret comment.
       ORIGINAL: original-value
       UNCHANGED: unchanged-value
+
+      TRAILING: trailing-value

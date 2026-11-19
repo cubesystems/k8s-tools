@@ -3,6 +3,11 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.6.1
+
+- `secrets encrypt --in-place`, `set`, `edit` and `rekey` no longer remove the blank lines
+  from the values files and `deployments.yaml` they change.
+
 ## 2.5.0
 
 - `beforeDeploy` hooks receive the requested image tag as `IMAGE_TAG`, empty when

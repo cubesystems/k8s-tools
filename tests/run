@@ -322,12 +322,15 @@ bash "$test_tools/secrets" encrypt test "$test_project/values/test.yaml" --in-pl
 [ "$(file_mode "$test_project/values/test.yaml")" = 644 ]
 echo 'ok: plaintext snapshots stay private, are cleaned up, and encrypted replacements retain source permissions'
 encrypted_before=$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")
+blank_lines_before=$(grep -c '^$' "$test_project/values/test.yaml")
 printf 'line one\nline two\n' | bash "$test_tools/secrets" set test --file "$test_project/values/test.yaml" --secret app-config --key MULTILINE --stdin
 bash "$test_tools/secrets" decrypt test "$test_project/values/test.yaml" | yq -o=json '.' | jq -e '.secrets["app-config"].data.MULTILINE == "line one\nline two\n"' >/dev/null
 [ "$encrypted_before" = "$(yq '.secrets["app-config"].data.UNCHANGED' "$test_project/values/test.yaml")" ]
 grep -q '# Preserve this document comment.' "$test_project/values/test.yaml"
 grep -q '# Preserve this secret comment.' "$test_project/values/test.yaml"
-echo 'ok: secrets set preserves multiline bytes, comments, and unrelated ciphertext'
+[ "$blank_lines_before" -ge 2 ]
+[ "$blank_lines_before" = "$(grep -c '^$' "$test_project/values/test.yaml")" ]
+echo 'ok: secrets set preserves multiline bytes, comments, blank lines, and unrelated ciphertext'
 printf 'positional' | bash "$test_tools/secrets" set test "$test_project/values/test.yaml" --secret app-config --key POSITIONAL --stdin
 printf 'implicit' | bash "$test_tools/secrets" set test --secret app-config --key IMPLICIT --stdin 2> "$test_dir/stderr"
 grep -qF "Using $(realpath "$test_project/values/test.yaml")" "$test_dir/stderr"
