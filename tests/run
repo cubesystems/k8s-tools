@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 test_tools=$(cd "$(dirname "$0")/.." && pwd)
+bash "$test_tools/tests/build_dockerconfigjson"
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-tests.XXXXXX")
 trap 'rm -rf "$test_dir"' EXIT
 export REAL_HELM=$(command -v helm)

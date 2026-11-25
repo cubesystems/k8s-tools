@@ -3,6 +3,14 @@
 Versions are Git tags; `./k8s/update` offers the latest one. Read the entries between
 your installed version (`./k8s/deploy --version`) and the one you install.
 
+## 2.7.0
+
+- Restore `build_dockerconfigjson SERVER USERNAME PASSWORD` with the original YAML
+  output, correct JSON/YAML escaping, and unwrapped base64 for long credentials.
+- Omit PASSWORD for a hidden prompt, or pass `--password-stdin` before SERVER to
+  read it from stdin, removing one trailing LF or CRLF. No deployment configuration
+  is required; `symlink-commands build_dockerconfigjson` adds an optional command link.
+
 ## 2.6.1
 
 - `secrets encrypt --in-place`, `set`, `edit` and `rekey` no longer remove the blank lines

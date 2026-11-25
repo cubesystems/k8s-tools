@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -eo pipefail
+test_tools=$(cd "$(dirname "$0")/.." && pwd)
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/k8s-tools-dockerconfigjson-tests.XXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+helper="$test_tools/build_dockerconfigjson"
+# A standalone formatter must not try to load deployment configuration.
+export K8S_TOOLS_CONFIG="$test_dir/missing-deployments.yaml"
+
+assert_credentials() {
+  local output=$1 server=$2 username=$3 password=$4
+  printf '%s\n' "$output" | yq -o=json '.' | jq -e \
+    --arg server "$server" --arg username "$username" --arg password "$password" '
+      keys == [".dockerconfigjson"] and
+      (.[".dockerconfigjson"] | fromjson | .auths | keys == [$server]) and
+      (.[".dockerconfigjson"] | fromjson | .auths[$server] |
+        .username == $username and .password == $password and .email == $username and
+        (.auth | contains("\n") | not) and (.auth | @base64d) == ($username + ":" + $password))' >/dev/null
+}
+expect_failure() {
+  if "$@" > "$test_dir/stdout" 2> "$test_dir/stderr"; then
+    echo 'Expected helper failure' >&2
+    exit 1
+  fi
+  [ ! -s "$test_dir/stdout" ]
+  [ -s "$test_dir/stderr" ]
+}
+
+output=$("$helper" registry.example.test user password)
+[ "$output" = '.dockerconfigjson: '\''{"auths":{"registry.example.test":{"username":"user","password":"password","email":"user","auth":"dXNlcjpwYXNzd29yZA=="}}}'\' ]
+assert_credentials "$output" registry.example.test user password
+server=$'registry.example.test:5000/a\'"\\b'
+username=$' user\'"\\\tā $literal '
+password=$' p\'"\\\t\r\nās$word:$(literal)\n\n'
+assert_credentials "$("$helper" "$server" "$username" "$password")" "$server" "$username" "$password"
+assert_credentials "$("$helper" registry user $'Unicode separators: \xc2\x85\xe2\x80\xa8\xe2\x80\xa9')" registry user $'Unicode separators: \xc2\x85\xe2\x80\xa8\xe2\x80\xa9'
+long_password=$(printf '%0300d' 1)
+assert_credentials "$("$helper" registry user "$long_password")" registry user "$long_password"
+assert_credentials "$("$helper" registry user '')" registry user ''
+assert_credentials "$("$helper" registry user --password-stdin)" registry user --password-stdin
+echo 'ok: legacy YAML output, quotes, backslashes, whitespace, Unicode, empty and long passwords round-trip'
+
+for ending in '' $'\n' $'\r\n'; do
+  output=$(printf '%s%s' "$password" "$ending" | "$helper" --password-stdin "$server" "$username")
+  expected_password=$password
+  if [ -z "$ending" ]; then expected_password=${password%$'\n'}; fi
+  assert_credentials "$output" "$server" "$username" "$expected_password"
+done
+assert_credentials "$(printf '%s' 'without newline' | "$helper" --password-stdin registry user)" registry user 'without newline'
+printf 'invalid\0password' | expect_failure "$helper" --password-stdin registry user
+echo 'ok: stdin preserves credential contents, trims one line ending, and rejects NUL bytes'
+
+expect_failure "$helper"
+expect_failure "$helper" registry
+expect_failure "$helper" registry user < /dev/null
+expect_failure "$helper" registry user password extra
+expect_failure "$helper" --unknown registry user
+expect_failure "$helper" --password-stdin registry user password
+expect_failure "$helper" '' user password
+expect_failure "$helper" registry '' password
+expect_failure "$helper" registry user:name password
+"$helper" --help | grep '^Usage: ' >/dev/null
+"$helper" --version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' >/dev/null
+echo 'ok: invalid arguments fail without output; help and version work without deployment configuration'
+
+mkdir -p "$test_dir/project with spaces/k8s-tools"
+cp "$helper" "$test_tools/common" "$test_tools/symlink-commands" "$test_dir/project with spaces/k8s-tools/"
+(cd "$test_dir" && "$test_dir/project with spaces/k8s-tools/symlink-commands" build_dockerconfigjson) >/dev/null
+linked_helper="$test_dir/project with spaces/build_dockerconfigjson"
+[ -L "$linked_helper" ]
+assert_credentials "$(cd "$test_dir" && "$linked_helper" registry user password)" registry user password
+for completion_shell in bash zsh; do
+  if "$test_tools/completion" "$completion_shell" | grep -E '(complete|compdef) .*/build_dockerconfigjson$' >/dev/null; then
+    echo 'Registry helper should not get deployment completion' >&2
+    exit 1
+  fi
+done
+echo 'ok: optional symlink works from unrelated directories and paths with spaces; no deployment completion'

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+source "$(dirname "$(realpath "$0")")/common"
+usage_help='Prints a .dockerconfigjson YAML entry for registry credentials; no deployment configuration is needed.
+Omit PASSWORD to enter it without echoing, or use --password-stdin before SERVER to read it from stdin.
+Stdin removes one trailing LF or CRLF; positional passwords are preserved exactly.'
+require_usage 0 '[--password-stdin] SERVER USERNAME [PASSWORD]' "$@"
+
+password_stdin=false
+case "${1:-}" in
+  --password-stdin) password_stdin=true; shift;;
+  --version) [ "$#" -eq 1 ] || usage_error; printf '%s\n' "$tools_version"; exit 0;;
+  --*) usage_error "Unknown option: $1";;
+esac
+if [ "$password_stdin" = true ]; then
+  [ "$#" -eq 2 ] || usage_error '--password-stdin requires SERVER and USERNAME only'
+else
+  [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage_error
+fi
+server=$1
+username=$2
+[ -n "$server" ] || usage_error 'SERVER must not be empty'
+[ -n "$username" ] || usage_error 'USERNAME must not be empty'
+case "$username" in *:*) usage_error 'USERNAME must not contain a colon';; esac
+need_command jq
+
+if [ "$password_stdin" = false ]; then
+  if [ "$#" -eq 3 ]; then
+    password=$3
+  else
+    [ -t 0 ] || usage_error 'Provide PASSWORD or use --password-stdin'
+    if ! IFS= read -r -s -p 'Registry password: ' password; then
+      printf '\n' >&2
+      die 'Could not read password'
+    fi
+    printf '\n' >&2
+  fi
+fi
+
+# Keep the password out of jq's arguments. jq also produces unwrapped base64 on every platform.
+docker_config=$(
+  if [ "$password_stdin" = true ]; then cat; else printf '%s' "$password"; fi |
+    jq -Rasc --arg server "$server" --arg username "$username" --argjson stdin "$password_stdin" '
+      (if $stdin then sub("\r?\n$"; "") else . end) as $password
+      | if $password | contains("\u0000") then error("PASSWORD must not contain NUL bytes") else
+          {auths: {($server): {
+            username: $username,
+            password: $password,
+            email: $username,
+            auth: (($username + ":" + $password) | @base64)
+          }}}
+        end'
+)
+# JSON handles double quotes and control characters; YAML single quotes must be doubled separately.
+single_quote="'"
+printf ".dockerconfigjson: '%s'\n" "${docker_config//$single_quote/$single_quote$single_quote}"
